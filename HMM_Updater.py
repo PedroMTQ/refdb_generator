@@ -12,7 +12,7 @@ import os
 import argparse
 from sys import argv
 
-__author__ = "Pedro Queirós, Polina Novikova"
+__author__ = "Pedro Queirós and Polina Novikova"
 __status__ = "Production"
 __credits__ = ['Pedro Queirós','Polina Novikova']
 SPLITTER='/'
@@ -31,7 +31,6 @@ class HMM_Updater():
         self.fasta_dir = f'{self.work_dir}{SPLITTER}fastas{SPLITTER}'
         self.aln_dir = f'{self.work_dir}{SPLITTER}aln{SPLITTER}'
         self.hmm_dir = f'{self.work_dir}{SPLITTER}hmm{SPLITTER}'
-        self.metadata_file = f'{self.work_dir}{SPLITTER}metadata.tsv'
 
 
     def processes_handler(self, target_worker_function, add_sentinels=True):
@@ -289,7 +288,9 @@ class HMM_Updater_Uniprot_Rhea(HMM_Updater):
         return res
 
     def write_metadata(self,rhea2xrefs_path):
-        if not os.path.exists(self.metadata_file):
+        metadata_file = f'{self.work_dir}{SPLITTER}uniprot_rhea.tsv'
+
+        if not os.path.exists(metadata_file):
             print('Parsing rhea2xrefs')
             rhea2ids={}
             with open(rhea2xrefs_path) as file:
@@ -301,9 +302,9 @@ class HMM_Updater_Uniprot_Rhea(HMM_Updater):
                         rhea_id,direction,master_id,db_id,db_type=line.split('\t')
                         if master_id not in rhea2ids: rhea2ids[master_id]={}
                         if db_type=='EC': db_type='enzyme_ec'
-                        elif db_type=='METACYC': db_type='biocyc'
-                        elif db_type=='ECOCYC': db_type='biocyc'
-                        elif db_type=='KEGG_REACTION': db_type='kegg'
+                        elif db_type=='METACYC': db_type='biocyc_reaction'
+                        elif db_type=='ECOCYC': db_type='biocyc_reaction'
+                        elif db_type=='KEGG_REACTION': db_type='kegg_reaction'
                         elif db_type=='GO':
                             db_type='go'
                             db_id=db_id.strip('GO:')
@@ -314,7 +315,7 @@ class HMM_Updater_Uniprot_Rhea(HMM_Updater):
                             if db_type not in rhea2ids[master_id]: rhea2ids[master_id][db_type]=set()
                             rhea2ids[master_id][db_type].add(db_id)
                     line=file.readline()
-            with open(self.metadata_file,'w+') as file:
+            with open(metadata_file,'w+') as file:
                 for rhea_id in rhea2ids:
                     line = [rhea_id,'|']
                     for db_type in rhea2ids[rhea_id]:
