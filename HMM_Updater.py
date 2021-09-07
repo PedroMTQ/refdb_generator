@@ -318,6 +318,7 @@ class HMM_Updater_Uniprot_Rhea(HMM_Updater):
             with open(metadata_file,'w+') as file:
                 for rhea_id in rhea2ids:
                     line = [rhea_id,'|']
+                    line.append(f'rhea:{rhea_id}')
                     for db_type in rhea2ids[rhea_id]:
                         for db_id in rhea2ids[rhea_id][db_type]:
                             line.append(f'{db_type}:{db_id}')
@@ -354,6 +355,17 @@ class HMM_Updater_Uniprot_Rhea(HMM_Updater):
                     with open(fasta_file, 'a+') as file:
                         outline = f'>{uniprot_id}\n{sequence}\n'
                         file.write(outline)
+
+    def only_write_metadata(self):
+        rhea2xrefs_file = f'{self.work_dir}{SPLITTER}rhea2xrefs.tsv'
+        rhea2xrefs_url='https://ftp.expasy.org/databases/rhea/tsv/rhea2xrefs.tsv'
+
+        if not os.path.exists(rhea2xrefs_file):
+            self.download_file_ftp(rhea2xrefs_url, rhea2xrefs_file)
+
+        self.write_metadata(rhea2xrefs_file)
+
+
 
     def workflow_function(self):
 
