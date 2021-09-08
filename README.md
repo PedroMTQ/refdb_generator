@@ -1,11 +1,13 @@
-Provides automated update of UniProt based HMMs, using two types of IDs as clustering, i.e., Rhea and ECs
+Provides automated update of UniProt based HMMs, using several types of IDs as clustering, i.e., Rhea, ECs, Reactome and BIGG
+
 Please set the directory paths where the HMMs should be created
 
+BIGG is generally used for metabolic modelling and these HMMs can thus be linked to metabolic models and metabolic model generation tools
 
-The Rhea HMMs also contain cross-linking metadata which is in a format compatible to Mantis - https://github.com/PedroMTQ/mantis
+All HMMs contain cross-linking metadata which is in a format compatible to Mantis - https://github.com/PedroMTQ/mantis
 
 Arguments:
-- `-db` or `--database`,to choose whether to cluster with `ec` or  `rhea`
+- `-db` or `--database`,to choose whether to cluster with `ec`, `rhea`, `reactome` and `bigg`
 - `-o` or `--output_folder`,to specify directory to save HMMs in
 - `-ms` or `--min_seqs`, minimum sequences per HMM. Default is 10
 - `-rf` or `--remove_files`, to remove files from previous runs

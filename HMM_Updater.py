@@ -11,8 +11,10 @@ from time import sleep
 import os
 import argparse
 from sys import argv
+from Web_Connector import Web_Connector
 
-__author__ = "Pedro Queirós and Polina Novikova"
+
+__author__ = "Pedro Queirós"
 __status__ = "Production"
 __credits__ = ['Pedro Queirós','Polina Novikova']
 SPLITTER='/'
@@ -81,7 +83,25 @@ class HMM_Updater():
             print('Cores allocated:', res)
             return int(res)
 
-
+    #low memory footprint_version
+    def read_protein_fasta_generator(self,protein_fasta_path):
+        query=None
+        seq=[]
+        with open(protein_fasta_path, 'r') as file:
+            line = file.readline()
+            while line:
+                if line.startswith('>'):
+                    if query:
+                        query = query.split('|')[1]
+                        yield query,''.join(seq).upper()
+                        seq=[]
+                    query=line.replace('>','').strip()
+                else:
+                    seq.append(line.strip())
+                line = file.readline()
+            if query:
+                query=query.split('|')[1]
+                yield query, ''.join(seq).upper()
 
 
     def get_seqs_count(self,target_sample):
@@ -172,7 +192,7 @@ class HMM_Updater():
             profiles = [self.hmm_dir + SPLITTER + i for i in os.listdir(self.hmm_dir) if i.lower().endswith('.hmm')]
             self.concat_files(output_file, profiles)
             print('Pressing profile', output_file)
-            self.hmm_presser(hmm_file)
+            self.hmm_presser(output_file)
 
     def hmm_presser(self,hmm_file):
         software = 'hmmpress'
@@ -180,11 +200,58 @@ class HMM_Updater():
         print('Running command:', command)
         subprocess.run(command, shell=True)
 
+    def parse_bigg(self,rhea2bigg_path,wanted_dbs=[]):
+        print('Parsing BIGG metadata')
+        with open(rhea2bigg_path) as file:
+            file.readline()
+            line = file.readline()
+            res = {}
+            not_added = set()
+            while line:
+                line = line.strip('\n')
+                bigg_id, name, reaction_string, model_list, database_links, old_bigg_ids = line.split('\t')
+                if database_links:
+                    database_links = database_links.split(';')
+                    database_links = [i.strip() for i in database_links]
+                    for db_link in database_links:
+                        db, db_id = db_link.split(': ')
+                        if db == 'RHEA' and 'rhea' in wanted_dbs and wanted_dbs:
+                            db_id = db_id.split('/')[-1]
+                            if db_id not in res: res[db_id] = set()
+                            res[db_id].add(bigg_id)
+                        elif db == 'Reactome Reaction' and 'reactome' in wanted_dbs and wanted_dbs:
+                            db_id = db_id.split('/')[-1]
+                            if db_id not in res: res[db_id] = set()
+                            res[db_id].add(bigg_id)
+                        elif db == 'EC Number' and 'ec' in wanted_dbs and wanted_dbs:
+                            db_id = db_id.split('/')[-1]
+                            if db_id not in res: res[db_id] = set()
+                            res[db_id].add(bigg_id)
+                        elif not wanted_dbs:
+                            if db == 'RHEA': db='rhea'
+                            elif db == 'Reactome Reaction': db='reactome'
+                            elif db == 'EC Number': db='enzyme_ec'
+                            elif db == 'MetaNetX (MNX) Equation': db='metanetx'
+                            elif db == 'SEED Reaction': db='seed'
+                            elif db == 'BioCyc': db='biocyc_reaction'
+                            elif db == 'KEGG Reaction': db='kegg_reaction'
+                            else:
+                                print(db)
+                            db_id = db_id.split('/')[-1]
+                            if bigg_id not in res: res[bigg_id]={}
+                            if db not in res[bigg_id]: res[bigg_id][db]=set()
+                            res[bigg_id][db].add(db_id)
+                        else:
+                            not_added.add(db)
+                line = file.readline()
+        return res
+
 
 class HMM_Updater_Uniprot_EC(HMM_Updater):
     def __init__(self,work_dir,remove_files,min_seqs):
         HMM_Updater.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs)
         self.workflow_function()
+        self.write_metadata()
 
 
     def uniprot_xml_parser(self,input_file_xml):
@@ -235,7 +302,26 @@ class HMM_Updater_Uniprot_EC(HMM_Updater):
                             outline = f'>{accession}\n{sequence}\n'
                             file.write(outline)
 
+    def write_metadata(self):
+        bigg2refs_file=f'{self.work_dir}{SPLITTER}bigg_models_reactions.txt'
+        bigg2refs_file_url='http://bigg.ucsd.edu/static/namespace/bigg_models_reactions.txt'
 
+        if not os.path.exists(bigg2refs_file):
+            self.download_file_ftp(bigg2refs_file_url, bigg2refs_file)
+
+        wanted_ec='ec'
+        metadata_file = f'{self.work_dir}{SPLITTER}uniprot_{wanted_ec}.tsv'
+        bigg_metadata=self.parse_bigg(bigg2refs_file,wanted_dbs=['ec'])
+
+        if not os.path.exists(metadata_file):
+            with open(metadata_file,'w+') as file:
+                for main_id in bigg_metadata:
+                    line = [main_id,'|']
+                    line.append(f'enzyme_ec:{main_id}')
+                    for db_id in bigg_metadata[main_id]:
+                        line.append(f'bigg:{db_id}')
+                    file.write('\t'.join(line)+'\n')
+        os.remove(bigg2refs_file)
 
     def workflow_function(self):
 
@@ -270,6 +356,7 @@ class HMM_Updater_Uniprot_Rhea(HMM_Updater):
     def __init__(self,work_dir,remove_files,min_seqs):
         HMM_Updater.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs)
         self.workflow_function()
+        self.write_metadata()
 
 
     def parse_rhea2uniprot(self,rhea2uniprot_path):
@@ -287,13 +374,33 @@ class HMM_Updater_Uniprot_Rhea(HMM_Updater):
                 line = file.readline()
         return res
 
-    def write_metadata(self,rhea2xrefs_path):
-        metadata_file = f'{self.work_dir}{SPLITTER}uniprot_rhea.tsv'
+
+
+    def write_metadata(self):
+
+
+        rhea2xrefs_file = f'{self.work_dir}{SPLITTER}rhea2xrefs.tsv'
+        rhea2xrefs_url='https://ftp.expasy.org/databases/rhea/tsv/rhea2xrefs.tsv'
+
+        rhea2bigg_file=f'{self.work_dir}{SPLITTER}bigg_models_reactions.txt'
+        rhea2bigg_url='http://bigg.ucsd.edu/static/namespace/bigg_models_reactions.txt'
+
+
+        if not os.path.exists(rhea2xrefs_file):
+            self.download_file_ftp(rhea2xrefs_url, rhea2xrefs_file)
+
+        if not os.path.exists(rhea2bigg_file):
+            self.download_file_ftp(rhea2bigg_url, rhea2bigg_file)
+
+        wanted_db='rhea'
+        metadata_file = f'{self.work_dir}{SPLITTER}uniprot_{wanted_db}.tsv'
+        rhea2bigg=self.parse_bigg(rhea2bigg_file,wanted_dbs=[wanted_db])
+
 
         if not os.path.exists(metadata_file):
             print('Parsing rhea2xrefs')
             rhea2ids={}
-            with open(rhea2xrefs_path) as file:
+            with open(rhea2xrefs_file) as file:
                 line=file.readline()
                 line=file.readline()
                 while line:
@@ -316,55 +423,31 @@ class HMM_Updater_Uniprot_Rhea(HMM_Updater):
                             rhea2ids[master_id][db_type].add(db_id)
                     line=file.readline()
             with open(metadata_file,'w+') as file:
-                for rhea_id in rhea2ids:
-                    line = [rhea_id,'|']
-                    line.append(f'rhea:{rhea_id}')
-                    for db_type in rhea2ids[rhea_id]:
-                        for db_id in rhea2ids[rhea_id][db_type]:
+                for main_id in rhea2ids:
+
+                    line = [main_id,'|']
+                    line.append(f'{wanted_db}:{main_id}')
+                    if main_id in rhea2bigg:
+                        for bigg_id in rhea2bigg[main_id]:
+                            line.append(f'bigg:{bigg_id}')
+                    for db_type in rhea2ids[main_id]:
+                        for db_id in rhea2ids[main_id][db_type]:
                             line.append(f'{db_type}:{db_id}')
                     file.write('\t'.join(line)+'\n')
+        os.remove(rhea2xrefs_file)
+        os.remove(rhea2bigg_file)
 
-    #low memory footprint_version
-    def read_protein_fasta_generator(self,protein_fasta_path):
-        query=None
-        seq=[]
-        with open(protein_fasta_path, 'r') as file:
-            line = file.readline()
-            while line:
-                if line.startswith('>'):
-                    if query:
-                        query = query.split('|')[1]
-                        yield query,''.join(seq).upper()
-                        seq=[]
-                    query=line.replace('>','').strip()
-                else:
-                    seq.append(line.strip())
-                line = file.readline()
-            if query:
-                query=query.split('|')[1]
-                yield query, ''.join(seq).upper()
-
-    def fasta_writer(self,rhea_uniprot, uncompressed_uniprot_fastas):
+    def fasta_writer(self,uniprot_mapping, uncompressed_uniprot_fastas):
         uniprot_seqs=self.read_protein_fasta_generator(uncompressed_uniprot_fastas)
         for uniprot_seq in uniprot_seqs:
             uniprot_id,sequence=uniprot_seq
-            for rhea_id in rhea_uniprot:
-                seq_ids=rhea_uniprot[rhea_id]
+            for main_id in uniprot_mapping:
+                seq_ids=uniprot_mapping[main_id]
                 if uniprot_id in seq_ids and len(seq_ids)>=self.min_seqs:
-                    fasta_file = f'{self.fasta_dir}{rhea_id}.faa'
+                    fasta_file = f'{self.fasta_dir}{main_id}.faa'
                     with open(fasta_file, 'a+') as file:
                         outline = f'>{uniprot_id}\n{sequence}\n'
                         file.write(outline)
-
-    def only_write_metadata(self):
-        rhea2xrefs_file = f'{self.work_dir}{SPLITTER}rhea2xrefs.tsv'
-        rhea2xrefs_url='https://ftp.expasy.org/databases/rhea/tsv/rhea2xrefs.tsv'
-
-        if not os.path.exists(rhea2xrefs_file):
-            self.download_file_ftp(rhea2xrefs_url, rhea2xrefs_file)
-
-        self.write_metadata(rhea2xrefs_file)
-
 
 
     def workflow_function(self):
@@ -376,8 +459,6 @@ class HMM_Updater_Uniprot_Rhea(HMM_Updater):
         rhea2uiniprot_url='https://ftp.expasy.org/databases/rhea/tsv/rhea2uniprot.tsv'
         rhea2uiniprot_file = f'{self.work_dir}{SPLITTER}rhea2uniprot.tsv'
 
-        rhea2xrefs_file = f'{self.work_dir}{SPLITTER}rhea2xrefs.tsv'
-        rhea2xrefs_url='https://ftp.expasy.org/databases/rhea/tsv/rhea2xrefs.tsv'
 
 
 
@@ -398,8 +479,7 @@ class HMM_Updater_Uniprot_Rhea(HMM_Updater):
         if not os.path.exists(rhea2uiniprot_file):
             self.download_file_ftp(rhea2uiniprot_url, rhea2uiniprot_file)
 
-        if not os.path.exists(rhea2xrefs_file):
-            self.download_file_ftp(rhea2xrefs_url, rhea2xrefs_file)
+
 
 
         if not os.path.exists(uncompressed_uniprot_fastas):
@@ -412,7 +492,222 @@ class HMM_Updater_Uniprot_Rhea(HMM_Updater):
         self.launch_fastas_msa()
         self.launch_aln_hmmer()
         self.merge_profiles(output_file=hmm_file)
-        self.write_metadata(rhea2xrefs_file)
+        print(f'Finished generating {hmm_file}')
+
+
+class HMM_Updater_Uniprot_Reactome(HMM_Updater):
+    def __init__(self,work_dir,remove_files,min_seqs):
+        HMM_Updater.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs)
+        self.workflow_function()
+        self.write_metadata()
+
+
+    def parse_reactome2uniprot(self,reactome2uniprot_path):
+        print('Parsing reactome2uniprot')
+        res = {}
+        with open(reactome2uniprot_path) as file:
+            line = file.readline()
+            while line:
+                line = line.strip('\n')
+                if line:
+                    line = line.split('\t')
+                    uniprot_id, master_id = line[0], line[1]
+                    if master_id not in res: res[master_id] = set()
+                    res[master_id].add(uniprot_id)
+                line = file.readline()
+        return res
+
+
+
+    def write_metadata(self):
+        bigg2refs_file=f'{self.work_dir}{SPLITTER}bigg_models_reactions.txt'
+        bigg2refs_file_url='http://bigg.ucsd.edu/static/namespace/bigg_models_reactions.txt'
+
+        if not os.path.exists(bigg2refs_file):
+            self.download_file_ftp(bigg2refs_file_url, bigg2refs_file)
+
+        wanted_db='reactome'
+        metadata_file = f'{self.work_dir}{SPLITTER}uniprot_{wanted_db}.tsv'
+        bigg_metadata=self.parse_bigg(bigg2refs_file,wanted_dbs=[wanted_db])
+        if not os.path.exists(metadata_file):
+            with open(metadata_file,'w+') as file:
+                for main_id in bigg_metadata:
+                    line = [main_id,'|']
+                    line.append(f'{wanted_db}:{main_id}')
+                    for db_id in bigg_metadata[main_id]:
+                        line.append(f'bigg:{db_id}')
+                    file.write('\t'.join(line)+'\n')
+        os.remove(bigg2refs_file)
+
+    def fasta_writer(self,uniprot_mapping, uncompressed_uniprot_fastas):
+        uniprot_seqs=self.read_protein_fasta_generator(uncompressed_uniprot_fastas)
+        for uniprot_seq in uniprot_seqs:
+            uniprot_id,sequence=uniprot_seq
+            for main_id in uniprot_mapping:
+                seq_ids=uniprot_mapping[main_id]
+                if uniprot_id in seq_ids and len(seq_ids)>=self.min_seqs:
+                    fasta_file = f'{self.fasta_dir}{main_id}.faa'
+                    with open(fasta_file, 'a+') as file:
+                        outline = f'>{uniprot_id}\n{sequence}\n'
+                        file.write(outline)
+
+
+    def workflow_function(self):
+
+        uniprot_fastas_url = 'https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.fasta.gz'
+        compressed_uniprot_fastas = f'{self.work_dir}{SPLITTER}uniprot_file.xml.gz'
+        uncompressed_uniprot_fastas = f'{self.work_dir}{SPLITTER}uniprot_file.xml'
+
+        reactome2uniprot_url='https://reactome.org/download/current/UniProt2ReactomeReactions.txt'
+        reactome2uniprot_file = f'{self.work_dir}{SPLITTER}UniProt2ReactomeReactions.txt'
+
+        hmm_file=f'{self.work_dir}{SPLITTER}uniprot_reactome.hmm'
+
+
+        if os.path.exists(self.work_dir) and self.remove_files:
+            shutil.rmtree(self.work_dir)
+
+        for directory in [self.work_dir, self.fasta_dir, self.aln_dir, self.hmm_dir]:
+            Path(directory).mkdir(parents=True, exist_ok=True)
+
+
+        if not os.path.exists(compressed_uniprot_fastas) or not os.path.exists(uncompressed_uniprot_fastas):
+            self.download_file_ftp(uniprot_fastas_url, compressed_uniprot_fastas)
+
+
+        if not os.path.exists(reactome2uniprot_file):
+            self.download_file_ftp(reactome2uniprot_url, reactome2uniprot_file)
+
+        if not os.path.exists(uncompressed_uniprot_fastas):
+            self.unpack_gz(compressed_uniprot_fastas, uncompressed_uniprot_fastas)
+
+        if not os.listdir(self.fasta_dir):
+            reactome_uniprot = self.parse_reactome2uniprot(reactome2uniprot_file)
+            self.fasta_writer(reactome_uniprot, uncompressed_uniprot_fastas)
+
+
+        self.launch_fastas_msa()
+        self.launch_aln_hmmer()
+        self.merge_profiles(output_file=hmm_file)
+        print(f'Finished generating {hmm_file}')
+        os.remove(reactome2uniprot_file)
+        os.remove(compressed_uniprot_fastas)
+        os.remove(uncompressed_uniprot_fastas)
+
+
+class HMM_Updater_Uniprot_BIGG(HMM_Updater,Web_Connector):
+    def __init__(self,work_dir,remove_files,min_seqs):
+        HMM_Updater.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs)
+        Web_Connector.__init__(self)
+        self.mp_results = self.manager.list()
+        self.workflow_function()
+        self.write_metadata()
+
+
+    def get_all_models(self):
+        res=set()
+        models_url='http://bigg.ucsd.edu/api/v2/models'
+        json_page=self.get_url_json(models_url)
+        results=json_page['results']
+        for i in results:
+            bigg_id=i['bigg_id']
+            res.add(bigg_id)
+        return res
+
+    def get_genes_model(self,model_id):
+        res=set()
+        models_url=f'http://bigg.ucsd.edu/api/v2/models/{model_id}/genes'
+        json_page=self.get_url_json(models_url)
+        results=json_page['results']
+        for i in results:
+            bigg_id=i['bigg_id']
+            res.add(bigg_id)
+        return res
+
+    def get_gene_info(self,model_id,gene_id):
+        models_url=f'http://bigg.ucsd.edu/api/v2/models/{model_id}/genes/{gene_id}'
+        print(f'Getting info for model {model_id} and gene {gene_id}')
+        json_page=self.get_url_json(models_url)
+        protein_sequence=json_page['protein_sequence']
+        reactions=json_page['reactions']
+        reactions_bigg=set()
+        for i in reactions:
+            bigg_id=i['bigg_id']
+            reactions_bigg.add(bigg_id)
+        return [gene_id,protein_sequence,reactions_bigg]
+
+    def gene_info_worker_function(self, queue, master_pid):
+        while True:
+            record = queue.pop(0)
+            if record is None: break
+            arg1, arg2 = record
+            self.mp_results.append(self.get_gene_info(arg1, arg2))
+
+    def launch_reaction_info_retrieval(self, model_id, genes_list):
+        for gene_id in genes_list:
+            self.queue.append([model_id, gene_id])
+        self.processes_handler(self.gene_info_worker_function)
+        while self.mp_results:
+            yield self.mp_results.pop(0)
+
+    def export_to_fasta(self,reaction_id,gene_id,protein_sequence):
+        fasta_path = f'{self.fasta_dir}{SPLITTER}{reaction_id}.faa'
+        with open(fasta_path, 'a+') as file:
+            outline = f'>{gene_id}\n{protein_sequence}\n'
+            file.write(outline)
+
+    def fasta_writer(self):
+        for model_id in self.get_all_models():
+            print(f'Getting info for model {model_id}')
+            genes_list=self.get_genes_model(model_id)
+            reactions_generator=self.launch_reaction_info_retrieval(model_id,genes_list)
+            for gene_id, protein_sequence, reactions_bigg in reactions_generator:
+                for reaction_id in reactions_bigg:
+                    self.export_to_fasta(reaction_id,gene_id,protein_sequence)
+        for fasta_file in os.listdir(self.fasta_dir):
+            fasta_path=f'{self.fasta_dir}{SPLITTER}{fasta_file}'
+            len_fasta=self.get_seqs_count(fasta_path)
+            if len_fasta<self.min_seqs:
+                os.remove(fasta_path)
+
+    def write_metadata(self):
+        bigg_file=f'{self.work_dir}{SPLITTER}bigg_models_reactions.txt'
+        bigg_url='http://bigg.ucsd.edu/static/namespace/bigg_models_reactions.txt'
+        if not os.path.exists(bigg_file):
+            self.download_file_ftp(bigg_url, bigg_file)
+        metadata_file = f'{self.work_dir}{SPLITTER}bigg.tsv'
+        bigg_metadata=self.parse_bigg(bigg_file)
+        reactions_ids=[i.replace('.hmm','') for i in os.listdir(self.hmm_dir)]
+        if not os.path.exists(metadata_file):
+            with open(metadata_file,'w+') as file:
+                for main_id in reactions_ids:
+                    if main_id in bigg_metadata:
+                        line = [main_id,'|']
+                        for db in bigg_metadata[main_id]:
+                            for db_id in bigg_metadata[main_id]:
+                                line.append(f'{db}:{db_id}')
+                        file.write('\t'.join(line)+'\n')
+        os.remove(bigg_file)
+
+
+
+
+    def workflow_function(self):
+
+        hmm_file=f'{self.work_dir}{SPLITTER}bigg.hmm'
+
+        if os.path.exists(self.work_dir) and self.remove_files:
+            shutil.rmtree(self.work_dir)
+
+        for directory in [self.work_dir, self.fasta_dir, self.aln_dir, self.hmm_dir]:
+            Path(directory).mkdir(parents=True, exist_ok=True)
+
+        if not os.listdir(self.fasta_dir):
+            self.fasta_writer()
+
+        self.launch_fastas_msa()
+        self.launch_aln_hmmer()
+        self.merge_profiles(output_file=hmm_file)
         print(f'Finished generating {hmm_file}')
 
 
@@ -420,7 +715,7 @@ if __name__ == '__main__':
     print('Executing command:\n', ' '.join(argv))
     parser = argparse.ArgumentParser(description='An HMM generator tool using Uniprot sequences as reference and Rhea or EC to cluster these sequences\n'
                                      , formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument('-db','--database', help='[required]\tClustering ID',choices=['ec', 'rhea'])
+    parser.add_argument('-db','--database', help='[required]\tClustering ID',choices=['ec', 'rhea','reactome','bigg'])
     parser.add_argument('-o', '--output_folder', help='[required]\tDirectory to save HMMs in')
     parser.add_argument('-ms', '--min_seqs',help='[optional]\tMinimum sequences per HMM. Default is 10')
     parser.add_argument('-rf', '--remove_files', action='store_true',help='[optional]\tuse this to remove files from previous runs.')
@@ -436,7 +731,11 @@ if __name__ == '__main__':
         print('Missing output folder!')
     elif database=='rhea':
         updater = HMM_Updater_Uniprot_Rhea(output_folder, remove_files,min_seqs)
+    elif database=='reactome':
+        updater=HMM_Updater_Uniprot_Reactome(output_folder,remove_files,min_seqs)
     elif database=='ec':
         updater=HMM_Updater_Uniprot_EC(output_folder,remove_files,min_seqs)
+    elif database=='bigg':
+        updater=HMM_Updater_Uniprot_BIGG(output_folder,remove_files,min_seqs)
     else:
         print('Command is not valid')
