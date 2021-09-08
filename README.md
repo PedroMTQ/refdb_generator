@@ -31,6 +31,7 @@ To run this tool:
 
 Software used:
 - HMMER to build and press HMMs
+- Diamond for building the diamond databases
 - Muscle for MSAs under 500 sequences
 - Clustal Omega for MSAs above 500 sequences
 
