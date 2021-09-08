@@ -12,7 +12,7 @@ import os
 import argparse
 from sys import argv
 from Web_Connector import Web_Connector
-
+import requests
 
 __author__ = "Pedro Queirós"
 __status__ = "Production"
@@ -21,7 +21,7 @@ SPLITTER='/'
 
 
 
-class HMM_Updater():
+class Reference_Generator():
     def __init__(self,work_dir,remove_files=False,min_seqs=10):
         self.manager = Manager()
         self.queue = self.manager.list()
@@ -225,8 +225,9 @@ class HMM_Updater():
                             res[db_id].add(bigg_id)
                         elif db == 'EC Number' and 'ec' in wanted_dbs and wanted_dbs:
                             db_id = db_id.split('/')[-1]
-                            if db_id not in res: res[db_id] = set()
-                            res[db_id].add(bigg_id)
+                            if not db_id.endswith('-'):
+                                if db_id not in res: res[db_id] = set()
+                                res[db_id].add(bigg_id)
                         elif not wanted_dbs:
                             if db == 'RHEA': db='rhea'
                             elif db == 'Reactome Reaction': db='reactome'
@@ -247,9 +248,9 @@ class HMM_Updater():
         return res
 
 
-class HMM_Updater_Uniprot_EC(HMM_Updater):
+class Reference_Generator_Uniprot_EC(Reference_Generator):
     def __init__(self,work_dir,remove_files,min_seqs):
-        HMM_Updater.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs)
+        Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs)
         self.workflow_function()
         self.write_metadata()
 
@@ -352,9 +353,9 @@ class HMM_Updater_Uniprot_EC(HMM_Updater):
         print(f'Finished generating {hmm_file}')
 
 
-class HMM_Updater_Uniprot_Rhea(HMM_Updater):
+class Reference_Generator_Uniprot_Rhea(Reference_Generator):
     def __init__(self,work_dir,remove_files,min_seqs):
-        HMM_Updater.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs)
+        Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs)
         self.workflow_function()
         self.write_metadata()
 
@@ -443,7 +444,7 @@ class HMM_Updater_Uniprot_Rhea(HMM_Updater):
             uniprot_id,sequence=uniprot_seq
             for main_id in uniprot_mapping:
                 seq_ids=uniprot_mapping[main_id]
-                if uniprot_id in seq_ids and len(seq_ids)>=self.min_seqs:
+                if uniprot_id in seq_ids:
                     fasta_file = f'{self.fasta_dir}{main_id}.faa'
                     with open(fasta_file, 'a+') as file:
                         outline = f'>{uniprot_id}\n{sequence}\n'
@@ -495,9 +496,9 @@ class HMM_Updater_Uniprot_Rhea(HMM_Updater):
         print(f'Finished generating {hmm_file}')
 
 
-class HMM_Updater_Uniprot_Reactome(HMM_Updater):
+class Reference_Generator_Uniprot_Reactome(Reference_Generator):
     def __init__(self,work_dir,remove_files,min_seqs):
-        HMM_Updater.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs)
+        Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs)
         self.workflow_function()
         self.write_metadata()
 
@@ -545,7 +546,7 @@ class HMM_Updater_Uniprot_Reactome(HMM_Updater):
             uniprot_id,sequence=uniprot_seq
             for main_id in uniprot_mapping:
                 seq_ids=uniprot_mapping[main_id]
-                if uniprot_id in seq_ids and len(seq_ids)>=self.min_seqs:
+                if uniprot_id in seq_ids:
                     fasta_file = f'{self.fasta_dir}{main_id}.faa'
                     with open(fasta_file, 'a+') as file:
                         outline = f'>{uniprot_id}\n{sequence}\n'
@@ -595,9 +596,9 @@ class HMM_Updater_Uniprot_Reactome(HMM_Updater):
         os.remove(uncompressed_uniprot_fastas)
 
 
-class HMM_Updater_Uniprot_BIGG(HMM_Updater,Web_Connector):
+class Reference_Generator_Uniprot_BIGG_Reactions(Reference_Generator,Web_Connector):
     def __init__(self,work_dir,remove_files,min_seqs):
-        HMM_Updater.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs)
+        Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs)
         Web_Connector.__init__(self)
         self.mp_results = self.manager.list()
         self.workflow_function()
@@ -664,11 +665,7 @@ class HMM_Updater_Uniprot_BIGG(HMM_Updater,Web_Connector):
             for gene_id, protein_sequence, reactions_bigg in reactions_generator:
                 for reaction_id in reactions_bigg:
                     self.export_to_fasta(reaction_id,gene_id,protein_sequence)
-        for fasta_file in os.listdir(self.fasta_dir):
-            fasta_path=f'{self.fasta_dir}{SPLITTER}{fasta_file}'
-            len_fasta=self.get_seqs_count(fasta_path)
-            if len_fasta<self.min_seqs:
-                os.remove(fasta_path)
+
 
     def write_metadata(self):
         bigg_file=f'{self.work_dir}{SPLITTER}bigg_models_reactions.txt'
@@ -711,11 +708,140 @@ class HMM_Updater_Uniprot_BIGG(HMM_Updater,Web_Connector):
         print(f'Finished generating {hmm_file}')
 
 
+class Reference_Generator_Uniprot_BIGG_Genes(Reference_Generator,Web_Connector):
+    def __init__(self,work_dir,remove_files,min_seqs):
+        Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs)
+        Web_Connector.__init__(self)
+        self.mp_results = self.manager.list()
+        self.workflow_function()
+        self.write_metadata()
+
+
+    def get_all_models(self):
+        res=set()
+        models_url='http://bigg.ucsd.edu/api/v2/models'
+        json_page=self.get_url_json(models_url)
+        results=json_page['results']
+        for i in results:
+            bigg_id=i['bigg_id']
+            res.add(bigg_id)
+        return res
+
+    def get_genes_model(self,model_id):
+        res=set()
+        models_url=f'http://bigg.ucsd.edu/api/v2/models/{model_id}/genes'
+        json_page=self.get_url_json(models_url)
+        results=json_page['results']
+        for i in results:
+            bigg_id=i['bigg_id']
+            res.add(bigg_id)
+        return res
+
+    def get_gene_info(self,model_id,gene_id):
+        models_url=f'http://bigg.ucsd.edu/api/v2/models/{model_id}/genes/{gene_id}'
+        print(f'Getting info for model {model_id} and gene {gene_id}')
+        json_page=self.get_url_json(models_url)
+        protein_sequence=json_page['protein_sequence']
+        reactions=json_page['reactions']
+        reactions_bigg=set()
+        for i in reactions:
+            bigg_id=i['bigg_id']
+            reactions_bigg.add(bigg_id)
+        return [gene_id,protein_sequence,reactions_bigg]
+
+    def gene_info_worker_function(self, queue, master_pid):
+        while True:
+            record = queue.pop(0)
+            if record is None: break
+            arg1, arg2 = record
+            self.mp_results.append(self.get_gene_info(arg1, arg2))
+
+    def launch_reaction_info_retrieval(self, model_id, genes_list):
+        for gene_id in genes_list:
+            self.queue.append([model_id, gene_id])
+        self.processes_handler(self.gene_info_worker_function)
+        while self.mp_results:
+            yield self.mp_results.pop(0)
+
+    def export_to_fasta(self,model_id,gene_id,protein_sequence):
+        fasta_path = f'{self.fasta_dir}{SPLITTER}{model_id}.faa'
+        with open(fasta_path, 'a+') as file:
+            outline = f'>{gene_id}\n{protein_sequence}\n'
+            file.write(outline)
+        fasta_path = f'{self.work_dir}{SPLITTER}bigg.faa'
+        with open(fasta_path, 'a+') as file:
+            outline = f'>{gene_id}\n{protein_sequence}\n'
+            file.write(outline)
+
+    def fasta_writer(self):
+        self.genes_reactions={}
+        for model_id in self.get_all_models():
+            print(f'Getting info for model {model_id}')
+            genes_list=self.get_genes_model(model_id)
+            reactions_generator=self.launch_reaction_info_retrieval(model_id,genes_list)
+            for gene_id, protein_sequence, reactions_bigg in reactions_generator:
+                if gene_id not in self.genes_reactions: self.genes_reactions[gene_id]=set()
+                self.export_to_fasta(model_id,gene_id, protein_sequence)
+                for reaction_id in reactions_bigg:
+                    self.genes_reactions[gene_id].add(reaction_id)
+
+
+    def write_metadata(self):
+        bigg_file=f'{self.work_dir}{SPLITTER}bigg_models_reactions.txt'
+        bigg_url='http://bigg.ucsd.edu/static/namespace/bigg_models_reactions.txt'
+        if not os.path.exists(bigg_file):
+            self.download_file_ftp(bigg_url, bigg_file)
+        metadata_file = f'{self.work_dir}{SPLITTER}bigg.tsv'
+        bigg_metadata=self.parse_bigg(bigg_file)
+        if not os.path.exists(metadata_file):
+            with open(metadata_file,'w+') as file:
+                for gene_id in self.genes_reactions:
+                    line = [gene_id,'|']
+                    for reaction_id in self.genes_reactions[gene_id]:
+                        line.append(f'bigg_reaction:{reaction_id}')
+                        if reaction_id in bigg_metadata:
+                            for db in bigg_metadata[reaction_id]:
+                                for db_id in bigg_metadata[reaction_id][db]:
+                                    line.append(f'{db}:{db_id}')
+                    file.write('\t'.join(line)+'\n')
+        os.remove(bigg_file)
+
+    def download_diamond(self):
+        diamond_url = 'http://github.com/bbuchfink/diamond/releases/download/v2.0.9/diamond-linux64.tar.gz'
+        archive_path=f'{self.work_dir}{SPLITTER}diamond-linux64.tar.gz'
+        with requests.get(diamond_url, stream=True) as r:
+            with open(archive_path, 'wb') as f:
+                shutil.copyfileobj(r.raw, f)
+        shutil.unpack_archive(archive_path,extract_dir=self.work_dir)
+        os.remove(archive_path)
+
+    def workflow_function(self):
+
+        dmnd_file=f'{self.work_dir}{SPLITTER}bigg'
+        fasta_path = f'{self.work_dir}{SPLITTER}bigg.faa'
+
+        if os.path.exists(self.work_dir) and self.remove_files:
+            shutil.rmtree(self.work_dir)
+
+        for directory in [self.work_dir, self.fasta_dir]:
+            Path(directory).mkdir(parents=True, exist_ok=True)
+
+        if not os.listdir(self.fasta_dir):
+            self.fasta_writer()
+
+        self.download_diamond()
+        diamond_path=f'{self.work_dir}{SPLITTER}diamond'
+        dmnd_command=f'{diamond_path} makedb --in {fasta_path} -d {dmnd_file}'
+        subprocess.run(dmnd_command.split())
+        os.remove(diamond_path)
+        print(f'Finished generating {dmnd_file}')
+
+
 if __name__ == '__main__':
     print('Executing command:\n', ' '.join(argv))
     parser = argparse.ArgumentParser(description='An HMM generator tool using Uniprot sequences as reference and Rhea or EC to cluster these sequences\n'
                                      , formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument('-db','--database', help='[required]\tClustering ID',choices=['ec', 'rhea','reactome','bigg'])
+    parser.add_argument('-db','--database', help='[required]\tClustering ID',choices=['ec', 'rhea','reactome','bigg_reactions','bigg_genes'])
     parser.add_argument('-o', '--output_folder', help='[required]\tDirectory to save HMMs in')
     parser.add_argument('-ms', '--min_seqs',help='[optional]\tMinimum sequences per HMM. Default is 10')
     parser.add_argument('-rf', '--remove_files', action='store_true',help='[optional]\tuse this to remove files from previous runs.')
@@ -730,12 +856,14 @@ if __name__ == '__main__':
     if not output_folder:
         print('Missing output folder!')
     elif database=='rhea':
-        updater = HMM_Updater_Uniprot_Rhea(output_folder, remove_files,min_seqs)
+        updater = Reference_Generator_Uniprot_Rhea(output_folder, remove_files,min_seqs)
     elif database=='reactome':
-        updater=HMM_Updater_Uniprot_Reactome(output_folder,remove_files,min_seqs)
+        updater=Reference_Generator_Uniprot_Reactome(output_folder,remove_files,min_seqs)
     elif database=='ec':
-        updater=HMM_Updater_Uniprot_EC(output_folder,remove_files,min_seqs)
-    elif database=='bigg':
-        updater=HMM_Updater_Uniprot_BIGG(output_folder,remove_files,min_seqs)
+        updater=Reference_Generator_Uniprot_EC(output_folder,remove_files,min_seqs)
+    elif database=='bigg_reactions':
+        updater=Reference_Generator_Uniprot_BIGG_Reactions(output_folder,remove_files,min_seqs)
+    elif database=='bigg_genes':
+        updater=Reference_Generator_Uniprot_BIGG_Genes(output_folder,remove_files,min_seqs)
     else:
         print('Command is not valid')

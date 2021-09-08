@@ -1,4 +1,4 @@
-name: hmm_update
+name: reference_generator
 channels:
   - anaconda
   - conda-forge
@@ -41,4 +41,4 @@ dependencies:
   - xz=5.2.5=h516909a_1
   - zlib=1.2.11=h516909a_1010
   - clustalo 
-prefix: /home/pedroq/miniconda3/envs/hmm_update
+
