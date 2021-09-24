@@ -311,7 +311,7 @@ class Reference_Generator_Uniprot_EC(Reference_Generator):
             self.download_file_ftp(bigg2refs_file_url, bigg2refs_file)
 
         wanted_ec='ec'
-        metadata_file = f'{self.work_dir}{SPLITTER}uniprot_{wanted_ec}.tsv'
+        metadata_file = f'{self.work_dir}{SPLITTER}metadata.tsv'
         bigg_metadata=self.parse_bigg(bigg2refs_file,wanted_dbs=['ec'])
 
         if not os.path.exists(metadata_file):
@@ -394,7 +394,7 @@ class Reference_Generator_Uniprot_Rhea(Reference_Generator):
             self.download_file_ftp(rhea2bigg_url, rhea2bigg_file)
 
         wanted_db='rhea'
-        metadata_file = f'{self.work_dir}{SPLITTER}uniprot_{wanted_db}.tsv'
+        metadata_file = f'{self.work_dir}{SPLITTER}metadata.tsv'
         rhea2bigg=self.parse_bigg(rhea2bigg_file,wanted_dbs=[wanted_db])
 
 
@@ -528,7 +528,7 @@ class Reference_Generator_Uniprot_Reactome(Reference_Generator):
             self.download_file_ftp(bigg2refs_file_url, bigg2refs_file)
 
         wanted_db='reactome'
-        metadata_file = f'{self.work_dir}{SPLITTER}uniprot_{wanted_db}.tsv'
+        metadata_file = f'{self.work_dir}{SPLITTER}metadata.tsv'
         bigg_metadata=self.parse_bigg(bigg2refs_file,wanted_dbs=[wanted_db])
         if not os.path.exists(metadata_file):
             with open(metadata_file,'w+') as file:
@@ -672,7 +672,7 @@ class Reference_Generator_Uniprot_BIGG_Reactions(Reference_Generator,Web_Connect
         bigg_url='http://bigg.ucsd.edu/static/namespace/bigg_models_reactions.txt'
         if not os.path.exists(bigg_file):
             self.download_file_ftp(bigg_url, bigg_file)
-        metadata_file = f'{self.work_dir}{SPLITTER}bigg.tsv'
+        metadata_file = f'{self.work_dir}{SPLITTER}metadata.tsv'
         bigg_metadata=self.parse_bigg(bigg_file)
         reactions_ids=[i.replace('.hmm','') for i in os.listdir(self.hmm_dir)]
         if not os.path.exists(metadata_file):
@@ -791,7 +791,7 @@ class Reference_Generator_Uniprot_BIGG_Genes(Reference_Generator,Web_Connector):
         bigg_url='http://bigg.ucsd.edu/static/namespace/bigg_models_reactions.txt'
         if not os.path.exists(bigg_file):
             self.download_file_ftp(bigg_url, bigg_file)
-        metadata_file = f'{self.work_dir}{SPLITTER}bigg.tsv'
+        metadata_file = f'{self.work_dir}{SPLITTER}metadata.tsv'
         bigg_metadata=self.parse_bigg(bigg_file)
         if not os.path.exists(metadata_file):
             with open(metadata_file,'w+') as file:
@@ -839,7 +839,7 @@ class Reference_Generator_Uniprot_BIGG_Genes(Reference_Generator,Web_Connector):
 
 if __name__ == '__main__':
     print('Executing command:\n', ' '.join(argv))
-    parser = argparse.ArgumentParser(description='An HMM generator tool using Uniprot sequences as reference and Rhea or EC to cluster these sequences\n'
+    parser = argparse.ArgumentParser(description='This is a functional annotation reference generator tool\n'
                                      , formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument('-db','--database', help='[required]\tClustering ID',choices=['ec', 'rhea','reactome','bigg_reactions','bigg_genes'])
     parser.add_argument('-o', '--output_folder', help='[required]\tDirectory to save HMMs in')
