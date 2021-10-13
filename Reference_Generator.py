@@ -22,13 +22,15 @@ SPLITTER='/'
 
 
 class Reference_Generator():
-    def __init__(self,work_dir,remove_files=False,min_seqs=10):
+    def __init__(self,work_dir,remove_files=False,min_seqs=10,number_cores=None):
         self.manager = Manager()
         self.queue = self.manager.list()
         self.remove_files=remove_files
         self.min_seqs=min_seqs
-        worker_count = self.check_environment_cores()
-        self.worker_count=worker_count
+        if number_cores:
+            self.worker_count=number_cores
+        else:
+            self.worker_count=self.check_environment_cores()
         self.work_dir=work_dir
         self.fasta_dir = f'{self.work_dir}{SPLITTER}fastas{SPLITTER}'
         self.aln_dir = f'{self.work_dir}{SPLITTER}aln{SPLITTER}'
@@ -41,10 +43,12 @@ class Reference_Generator():
         if we need to add new work (e.g. when doing taxa annotation) we just add the new work to the start of the list
         '''
         # os.getpid to add the master_pid
-        processes = [Process(target=target_worker_function, args=(self.queue, os.getpid(),)) for _ in range(self.worker_count)]
+        if len(self.queue)<self.worker_count: worker_count=len(self.queue)
+        else: worker_count=self.worker_count
+        processes = [Process(target=target_worker_function, args=(self.queue, os.getpid(),)) for _ in range(worker_count)]
         # adding sentinel record since queue can be signaled as empty when its really not
         if add_sentinels:
-            for _ in range(self.worker_count):   self.queue.append(None)
+            for _ in range(worker_count):   self.queue.append(None)
         for process in processes:
             process.start()
         # we could manage the processes memory here with a while cycle
@@ -249,8 +253,8 @@ class Reference_Generator():
 
 
 class Reference_Generator_Uniprot_EC(Reference_Generator):
-    def __init__(self,work_dir,remove_files,min_seqs):
-        Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs)
+    def __init__(self,work_dir,remove_files,min_seqs,number_cores):
+        Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs,number_cores=number_cores)
         self.workflow_function()
         self.write_metadata()
 
@@ -310,7 +314,6 @@ class Reference_Generator_Uniprot_EC(Reference_Generator):
         if not os.path.exists(bigg2refs_file):
             self.download_file_ftp(bigg2refs_file_url, bigg2refs_file)
 
-        wanted_ec='ec'
         metadata_file = f'{self.work_dir}{SPLITTER}metadata.tsv'
         bigg_metadata=self.parse_bigg(bigg2refs_file,wanted_dbs=['ec'])
 
@@ -354,8 +357,8 @@ class Reference_Generator_Uniprot_EC(Reference_Generator):
 
 
 class Reference_Generator_Uniprot_Rhea(Reference_Generator):
-    def __init__(self,work_dir,remove_files,min_seqs):
-        Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs)
+    def __init__(self,work_dir,remove_files,min_seqs,number_cores):
+        Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs,number_cores=number_cores)
         self.workflow_function()
         self.write_metadata()
 
@@ -497,8 +500,8 @@ class Reference_Generator_Uniprot_Rhea(Reference_Generator):
 
 
 class Reference_Generator_Uniprot_Reactome(Reference_Generator):
-    def __init__(self,work_dir,remove_files,min_seqs):
-        Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs)
+    def __init__(self,work_dir,remove_files,min_seqs,number_cores):
+        Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs,number_cores=number_cores)
         self.workflow_function()
         self.write_metadata()
 
@@ -597,8 +600,8 @@ class Reference_Generator_Uniprot_Reactome(Reference_Generator):
 
 
 class Reference_Generator_Uniprot_BIGG_Reactions(Reference_Generator,Web_Connector):
-    def __init__(self,work_dir,remove_files,min_seqs):
-        Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs)
+    def __init__(self,work_dir,remove_files,min_seqs,number_cores):
+        Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs,number_cores=number_cores)
         Web_Connector.__init__(self)
         self.mp_results = self.manager.list()
         self.workflow_function()
@@ -709,8 +712,8 @@ class Reference_Generator_Uniprot_BIGG_Reactions(Reference_Generator,Web_Connect
 
 
 class Reference_Generator_Uniprot_BIGG_Genes(Reference_Generator,Web_Connector):
-    def __init__(self,work_dir,remove_files,min_seqs):
-        Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs)
+    def __init__(self,work_dir,remove_files,min_seqs,number_cores):
+        Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs,number_cores=number_cores)
         Web_Connector.__init__(self)
         self.mp_results = self.manager.list()
         self.workflow_function()
@@ -843,6 +846,7 @@ if __name__ == '__main__':
                                      , formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument('-db','--database', help='[required]\tClustering ID',choices=['ec', 'rhea','reactome','bigg_reactions','bigg_genes'])
     parser.add_argument('-o', '--output_folder', help='[required]\tDirectory to save HMMs in')
+    parser.add_argument('-c', '--number_cores', help='[optional]\tNumber of cores to use')
     parser.add_argument('-ms', '--min_seqs',help='[optional]\tMinimum sequences per HMM. Default is 10')
     parser.add_argument('-rf', '--remove_files', action='store_true',help='[optional]\tuse this to remove files from previous runs.')
 
@@ -850,20 +854,21 @@ if __name__ == '__main__':
     database = args.database
     output_folder = args.output_folder
     min_seqs = args.min_seqs
+    number_cores = args.number_cores
     remove_files = args.remove_files
     if min_seqs:    min_seqs=int(min_seqs)
     else:           min_seqs=10
     if not output_folder:
         print('Missing output folder!')
     elif database=='rhea':
-        updater = Reference_Generator_Uniprot_Rhea(output_folder, remove_files,min_seqs)
+        updater = Reference_Generator_Uniprot_Rhea(output_folder, remove_files,min_seqs,number_cores)
     elif database=='reactome':
-        updater=Reference_Generator_Uniprot_Reactome(output_folder,remove_files,min_seqs)
+        updater=Reference_Generator_Uniprot_Reactome(output_folder,remove_files,min_seqs,number_cores)
     elif database=='ec':
-        updater=Reference_Generator_Uniprot_EC(output_folder,remove_files,min_seqs)
+        updater=Reference_Generator_Uniprot_EC(output_folder,remove_files,min_seqs,number_cores)
     elif database=='bigg_reactions':
-        updater=Reference_Generator_Uniprot_BIGG_Reactions(output_folder,remove_files,min_seqs)
+        updater=Reference_Generator_Uniprot_BIGG_Reactions(output_folder,remove_files,min_seqs,number_cores)
     elif database=='bigg_genes':
-        updater=Reference_Generator_Uniprot_BIGG_Genes(output_folder,remove_files,min_seqs)
+        updater=Reference_Generator_Uniprot_BIGG_Genes(output_folder,remove_files,min_seqs,number_cores)
     else:
         print('Command is not valid')
