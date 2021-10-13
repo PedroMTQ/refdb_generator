@@ -28,7 +28,7 @@ class Reference_Generator():
         self.remove_files=remove_files
         self.min_seqs=min_seqs
         if number_cores:
-            self.worker_count=number_cores
+            self.worker_count=int(number_cores)
         else:
             self.worker_count=self.check_environment_cores()
         self.work_dir=work_dir
