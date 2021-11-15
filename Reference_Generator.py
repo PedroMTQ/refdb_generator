@@ -13,6 +13,7 @@ import argparse
 from sys import argv
 from Web_Connector import Web_Connector
 import requests
+from gzip import open as gzip_open
 
 __author__ = "Pedro Queirós"
 __status__ = "Production"
@@ -96,7 +97,10 @@ class Reference_Generator():
             while line:
                 if line.startswith('>'):
                     if query:
-                        query = query.split('|')[1]
+                        if '|' in query:
+                            query = query.split('|')[1]
+                        if protein_fasta_path.endswith('_pro'):
+                            query = query.split('_')[0]
                         yield query,''.join(seq).upper()
                         seq=[]
                     query=line.replace('>','').strip()
@@ -104,9 +108,39 @@ class Reference_Generator():
                     seq.append(line.strip())
                 line = file.readline()
             if query:
-                query=query.split('|')[1]
+                if '|' in query:
+                    query=query.split('|')[1]
+                    if protein_fasta_path.endswith('_pro'):
+                        query = query.split('_')[0]
                 yield query, ''.join(seq).upper()
 
+    #low memory footprint_version
+    def read_protein_fasta(self,protein_fasta_path):
+        query=None
+        seq=[]
+        res={}
+        with open(protein_fasta_path, 'r') as file:
+            line = file.readline()
+            while line:
+                if line.startswith('>'):
+                    if query:
+                        if '|' in query:
+                            query = query.split('|')[1]
+                        if protein_fasta_path.endswith('_pro'):
+                            query = query.split('_')[0]
+                        res[query]= ''.join(seq).upper()
+                        seq=[]
+                    query=line.replace('>','').strip()
+                else:
+                    seq.append(line.strip())
+                line = file.readline()
+            if query:
+                if '|' in query:
+                    query=query.split('|')[1]
+                    if protein_fasta_path.endswith('_pro'):
+                        query = query.split('_')[0]
+                res[query] = ''.join(seq).upper()
+        return res
 
     def get_seqs_count(self,target_sample):
         total_seqs = 0
@@ -466,8 +500,6 @@ class Reference_Generator_Uniprot_Rhea(Reference_Generator):
         rhea2uiniprot_file = f'{self.work_dir}{SPLITTER}rhea2uniprot.tsv'
 
 
-
-
         hmm_file=f'{self.work_dir}{SPLITTER}uniprot_rhea.hmm'
 
 
@@ -661,8 +693,9 @@ class Reference_Generator_Uniprot_BIGG_Reactions(Reference_Generator,Web_Connect
     def export_to_fasta(self,reaction_id,gene_id,protein_sequence):
         fasta_path = f'{self.fasta_dir}{SPLITTER}{reaction_id}.faa'
         with open(fasta_path, 'a+') as file:
-            outline = f'>{gene_id}\n{protein_sequence}\n'
-            file.write(outline)
+            if protein_sequence:
+                outline = f'>{gene_id}\n{protein_sequence}\n'
+                file.write(outline)
 
     def fasta_writer(self):
         for model_id in self.get_all_models():
@@ -726,19 +759,23 @@ class Reference_Generator_Uniprot_BIGG_Reactions(Reference_Generator,Web_Connect
         self.merge_profiles(output_file=hmm_file)
         print(f'Finished generating {hmm_file}')
 
-
 class Reference_Generator_Uniprot_BIGG_Genes(Reference_Generator,Web_Connector):
     def __init__(self,work_dir,remove_files,min_seqs,number_cores,rewrite_metadata):
         Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs,number_cores=number_cores)
         Web_Connector.__init__(self)
+
         self.mp_results = self.manager.list()
         if not rewrite_metadata:
             self.workflow_function()
         self.write_metadata()
 
 
+
+
+
     def get_all_models(self):
         res=set()
+        return {'e_coli_core'}
         models_url='http://bigg.ucsd.edu/api/v2/models'
         json_page=self.get_url_json(models_url)
         results=json_page['results']
@@ -759,22 +796,26 @@ class Reference_Generator_Uniprot_BIGG_Genes(Reference_Generator,Web_Connector):
 
     def get_gene_info(self,model_id,gene_id):
         models_url=f'http://bigg.ucsd.edu/api/v2/models/{model_id}/genes/{gene_id}'
-        print(f'Getting info for model {model_id} and gene {gene_id}')
+        #print(f'Getting info for model {model_id} and gene {gene_id}')
         json_page=self.get_url_json(models_url)
         protein_sequence=json_page['protein_sequence']
-        reactions=json_page['reactions']
-        reactions_bigg=set()
-        for i in reactions:
-            bigg_id=i['bigg_id']
-            reactions_bigg.add(bigg_id)
-        return [gene_id,protein_sequence,reactions_bigg]
+        dna_sequence=json_page['dna_sequence']
+        if protein_sequence or dna_sequence:
+            reactions=json_page['reactions']
+            reactions_bigg=set()
+            for i in reactions:
+                bigg_id=i['bigg_id']
+                reactions_bigg.add(bigg_id)
+            return [gene_id,protein_sequence,dna_sequence,reactions_bigg]
 
     def gene_info_worker_function(self, queue, master_pid):
         while True:
             record = queue.pop(0)
             if record is None: break
             arg1, arg2 = record
-            self.mp_results.append(self.get_gene_info(arg1, arg2))
+            gene_info=self.get_gene_info(arg1, arg2)
+            if gene_info:
+                self.mp_results.append(gene_info)
 
     def launch_reaction_info_retrieval(self, model_id, genes_list):
         for gene_id in genes_list:
@@ -783,15 +824,70 @@ class Reference_Generator_Uniprot_BIGG_Genes(Reference_Generator,Web_Connector):
         while self.mp_results:
             yield self.mp_results.pop(0)
 
-    def export_to_fasta(self,model_id,gene_id,protein_sequence):
-        fasta_path = f'{self.fasta_dir}{SPLITTER}{model_id}.faa'
-        with open(fasta_path, 'a+') as file:
+    def export_to_fasta(self,model_id,gene_id,protein_sequence,dna_sequence):
+        fasta_path_aa = f'{self.fasta_dir}{SPLITTER}{model_id}.faa_pre'
+        fasta_path_nt = f'{self.fasta_dir}{SPLITTER}{model_id}.fna'
+        with open(fasta_path_aa, 'a+') as file:
             outline = f'>{gene_id}\n{protein_sequence}\n'
             file.write(outline)
-        fasta_path = f'{self.work_dir}{SPLITTER}bigg.faa'
-        with open(fasta_path, 'a+') as file:
-            outline = f'>{gene_id}\n{protein_sequence}\n'
+        with open(fasta_path_nt, 'a+') as file:
+            outline = f'>{gene_id}\n{dna_sequence}\n'
             file.write(outline)
+
+    def export_bigg_faa(self):
+        fasta_folder=f'{self.fasta_dir}{SPLITTER}'
+        faa_list=[i for i in os.listdir(fasta_folder) if i.endswith('.faa')]
+        bigg_path = f'{self.work_dir}{SPLITTER}bigg.faa'
+        with open(bigg_path, 'a+') as file:
+            for faa in faa_list:
+                faa_path=f'{fasta_folder}{faa}'
+                all_seqs_generator=self.read_protein_fasta_generator(faa_path)
+                for seq_id,protein_sequence in all_seqs_generator:
+                        outline = f'>{seq_id}\n{protein_sequence}\n'
+                        file.write(outline)
+
+    def run_command(self,command,shell=False):
+        process = subprocess.run(command, shell=shell)
+        return process
+
+
+
+    def run_prodigal(self):
+        fasta_folder=f'{self.fasta_dir}{SPLITTER}'
+        fna_list=[i for i in os.listdir(fasta_folder) if i.endswith('.fna')]
+        for fna in fna_list:
+            faa=fna.replace('.fna','.faa_pro')
+            prodigal_command=f'prodigal -i {fasta_folder}{fna} -a {fasta_folder}{faa}'
+            self.run_command(prodigal_command,shell=True)
+
+    def merge_faa(self):
+        fasta_folder=f'{self.fasta_dir}{SPLITTER}'
+        model_list=[i.replace('.fna','') for i in os.listdir(fasta_folder) if i.endswith('.fna')]
+        for model_id in model_list:
+            faa_pre=f'{fasta_folder}{model_id}.faa_pre'
+            faa_prodigal=f'{fasta_folder}{model_id}.faa_pro'
+            fna=f'{fasta_folder}{model_id}.fna'
+            all_pre_proteins=self.read_protein_fasta(faa_pre)
+            all_prodigal_proteins=self.read_protein_fasta(faa_prodigal)
+            all_genes=self.read_protein_fasta(fna)
+            all_sequences=set(list(all_pre_proteins.keys())+list(all_prodigal_proteins.keys())+list(all_genes.keys()))
+            for seq_id in all_sequences:
+                fasta_path_aa = f'{self.fasta_dir}{SPLITTER}{model_id}.faa'
+                protein_sequence=None
+                #if bigg provides protein sequences we use them
+                if seq_id in all_pre_proteins:
+                    protein_sequence=all_pre_proteins[seq_id]
+                #if bigg doesnt, we predict with prodigal
+                elif seq_id not in all_pre_proteins and seq_id in all_prodigal_proteins:
+                    protein_sequence=all_prodigal_proteins[seq_id]
+                #if there is not protein and dna sequence, we just report it
+                else:
+                    print(f'Did not manage to export sequence {seq_id} for model {model_id}')
+                if protein_sequence:
+                    with open(fasta_path_aa, 'a+') as file:
+                        outline = f'>{seq_id}\n{protein_sequence}\n'
+                        file.write(outline)
+
 
     def fasta_writer(self):
         self.genes_reactions={}
@@ -799,12 +895,14 @@ class Reference_Generator_Uniprot_BIGG_Genes(Reference_Generator,Web_Connector):
             print(f'Getting info for model {model_id}')
             genes_list=self.get_genes_model(model_id)
             reactions_generator=self.launch_reaction_info_retrieval(model_id,genes_list)
-            for gene_id, protein_sequence, reactions_bigg in reactions_generator:
+            for gene_id, protein_sequence,dna_sequence, reactions_bigg in reactions_generator:
                 if gene_id not in self.genes_reactions: self.genes_reactions[gene_id]=set()
-                self.export_to_fasta(model_id,gene_id, protein_sequence)
+                self.export_to_fasta(model_id,gene_id, protein_sequence,dna_sequence)
                 for reaction_id in reactions_bigg:
                     self.genes_reactions[gene_id].add(reaction_id)
-
+        self.run_prodigal()
+        self.merge_faa()
+        self.export_bigg_faa()
 
     def write_metadata(self):
         bigg_file=f'{self.work_dir}{SPLITTER}bigg_models_reactions.txt'
@@ -837,14 +935,14 @@ class Reference_Generator_Uniprot_BIGG_Genes(Reference_Generator,Web_Connector):
 
     def workflow_function(self):
 
-        dmnd_file=f'{self.work_dir}{SPLITTER}bigg'
-        fasta_path = f'{self.work_dir}{SPLITTER}bigg.faa'
 
         if os.path.exists(self.work_dir) and self.remove_files:
             shutil.rmtree(self.work_dir)
-
         for directory in [self.work_dir, self.fasta_dir]:
             Path(directory).mkdir(parents=True, exist_ok=True)
+
+        dmnd_file=f'{self.work_dir}{SPLITTER}bigg'
+        fasta_path = f'{self.work_dir}{SPLITTER}bigg.faa'
 
         if not os.listdir(self.fasta_dir):
             self.fasta_writer()
