@@ -32,11 +32,34 @@ class Reference_Generator():
             self.worker_count=int(number_cores)
         else:
             self.worker_count=self.check_environment_cores()
+        if not work_dir.startswith(SPLITTER): work_dir=f'{SPLITTER}{work_dir}'
+        if not work_dir.endswith(SPLITTER): work_dir=f'{work_dir}{SPLITTER}'
         self.work_dir=work_dir
-        self.fasta_dir = f'{self.work_dir}{SPLITTER}fastas{SPLITTER}'
-        self.aln_dir = f'{self.work_dir}{SPLITTER}aln{SPLITTER}'
-        self.hmm_dir = f'{self.work_dir}{SPLITTER}hmm{SPLITTER}'
+        self.fasta_dir = f'{self.work_dir}fastas{SPLITTER}'
+        self.aln_dir = f'{self.work_dir}aln{SPLITTER}'
+        self.hmm_dir = f'{self.work_dir}hmm{SPLITTER}'
 
+    def run_command(self,command,shell=False):
+        process = subprocess.run(command, shell=shell)
+        return process
+
+    def run_prodigal(self):
+        fasta_folder=f'{self.fasta_dir}{SPLITTER}'
+        fna_list=[i for i in os.listdir(fasta_folder) if i.endswith('.fna')]
+        for fna in fna_list:
+            faa=fna.replace('.fna','.faa_pro')
+            prodigal_command=f'prodigal -i {fasta_folder}{fna} -a {fasta_folder}{faa}'
+            self.run_command(prodigal_command,shell=True)
+
+
+    def download_diamond(self):
+        diamond_url = 'http://github.com/bbuchfink/diamond/releases/download/v2.0.9/diamond-linux64.tar.gz'
+        archive_path = f'{self.work_dir}diamond-linux64.tar.gz'
+        with requests.get(diamond_url, stream=True) as r:
+            with open(archive_path, 'wb') as f:
+                shutil.copyfileobj(r.raw, f)
+        shutil.unpack_archive(archive_path, extract_dir=self.work_dir)
+        os.remove(archive_path)
 
     def processes_handler(self, target_worker_function, add_sentinels=True):
         '''
@@ -186,9 +209,10 @@ class Reference_Generator():
     def launch_fastas_msa(self):
         completed_msa = os.listdir(self.aln_dir)
         for file in os.listdir(self.fasta_dir):
-            file_aln = file.replace('.faa', '.aln')
-            if file_aln not in completed_msa:
-                self.queue.append(f'{self.fasta_dir}{file}')
+            if file.endswith('.faa'):
+                file_aln = file.replace('.faa', '.aln')
+                if file_aln not in completed_msa:
+                    self.queue.append(f'{self.fasta_dir}{file}')
 
         self.processes_handler(self.msa_worker_function)
 
@@ -209,9 +233,10 @@ class Reference_Generator():
     def launch_aln_hmmer(self):
         completed_hmm = os.listdir(self.hmm_dir)
         for file in os.listdir(self.aln_dir):
-            file_aln = file.replace('.aln', '.hmm')
-            if file_aln not in completed_hmm:
-                self.queue.append(f'{self.aln_dir}{file}')
+            if file.endswith('.aln'):
+                file_aln = file.replace('.aln', '.hmm')
+                if file_aln not in completed_hmm:
+                    self.queue.append(f'{self.aln_dir}{file}')
         self.processes_handler(self.hmm_builder_worker_function)
 
     def concat_files(self,output_file, list_file_paths):
@@ -343,13 +368,13 @@ class Reference_Generator_Uniprot_EC(Reference_Generator):
                             file.write(outline)
 
     def write_metadata(self):
-        bigg2refs_file=f'{self.work_dir}{SPLITTER}bigg_models_reactions.txt'
+        bigg2refs_file=f'{self.work_dir}bigg_models_reactions.txt'
         bigg2refs_file_url='http://bigg.ucsd.edu/static/namespace/bigg_models_reactions.txt'
 
         if not os.path.exists(bigg2refs_file):
             self.download_file_ftp(bigg2refs_file_url, bigg2refs_file)
 
-        metadata_file = f'{self.work_dir}{SPLITTER}metadata.tsv'
+        metadata_file = f'{self.work_dir}metadata.tsv'
         bigg_metadata=self.parse_bigg(bigg2refs_file,wanted_dbs=['ec'])
 
         if not os.path.exists(metadata_file):
@@ -365,9 +390,9 @@ class Reference_Generator_Uniprot_EC(Reference_Generator):
     def workflow_function(self):
 
         uniprot_url = 'https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.xml.gz'
-        compressed_uniprot = f'{self.work_dir}{SPLITTER}uniprot_file.xml.gz'
-        uncompressed_uniprot = f'{self.work_dir}{SPLITTER}uniprot_file.xml'
-        hmm_file=f'{self.work_dir}{SPLITTER}uniprot_ec.hmm'
+        compressed_uniprot = f'{self.work_dir}uniprot_file.xml.gz'
+        uncompressed_uniprot = f'{self.work_dir}uniprot_file.xml'
+        hmm_file=f'{self.work_dir}uniprot_ec.hmm'
 
         if os.path.exists(self.work_dir) and self.remove_files:
             shutil.rmtree(self.work_dir)
@@ -419,10 +444,10 @@ class Reference_Generator_Uniprot_Rhea(Reference_Generator):
     def write_metadata(self):
 
 
-        rhea2xrefs_file = f'{self.work_dir}{SPLITTER}rhea2xrefs.tsv'
+        rhea2xrefs_file = f'{self.work_dir}rhea2xrefs.tsv'
         rhea2xrefs_url='https://ftp.expasy.org/databases/rhea/tsv/rhea2xrefs.tsv'
 
-        rhea2bigg_file=f'{self.work_dir}{SPLITTER}bigg_models_reactions.txt'
+        rhea2bigg_file=f'{self.work_dir}bigg_models_reactions.txt'
         rhea2bigg_url='http://bigg.ucsd.edu/static/namespace/bigg_models_reactions.txt'
 
 
@@ -433,7 +458,7 @@ class Reference_Generator_Uniprot_Rhea(Reference_Generator):
             self.download_file_ftp(rhea2bigg_url, rhea2bigg_file)
 
         wanted_db='rhea'
-        metadata_file = f'{self.work_dir}{SPLITTER}metadata.tsv'
+        metadata_file = f'{self.work_dir}metadata.tsv'
         rhea2bigg=self.parse_bigg(rhea2bigg_file,wanted_dbs=[wanted_db])
 
 
@@ -493,14 +518,14 @@ class Reference_Generator_Uniprot_Rhea(Reference_Generator):
     def workflow_function(self):
 
         uniprot_fastas_url = 'https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.fasta.gz'
-        compressed_uniprot_fastas = f'{self.work_dir}{SPLITTER}uniprot_file.xml.gz'
-        uncompressed_uniprot_fastas = f'{self.work_dir}{SPLITTER}uniprot_file.xml'
+        compressed_uniprot_fastas = f'{self.work_dir}uniprot_file.xml.gz'
+        uncompressed_uniprot_fastas = f'{self.work_dir}uniprot_file.xml'
 
         rhea2uiniprot_url='https://ftp.expasy.org/databases/rhea/tsv/rhea2uniprot.tsv'
-        rhea2uiniprot_file = f'{self.work_dir}{SPLITTER}rhea2uniprot.tsv'
+        rhea2uiniprot_file = f'{self.work_dir}rhea2uniprot.tsv'
 
 
-        hmm_file=f'{self.work_dir}{SPLITTER}uniprot_rhea.hmm'
+        hmm_file=f'{self.work_dir}uniprot_rhea.hmm'
 
 
         if os.path.exists(self.work_dir) and self.remove_files:
@@ -559,14 +584,14 @@ class Reference_Generator_Uniprot_Reactome(Reference_Generator):
 
 
     def write_metadata(self):
-        bigg2refs_file=f'{self.work_dir}{SPLITTER}bigg_models_reactions.txt'
+        bigg2refs_file=f'{self.work_dir}bigg_models_reactions.txt'
         bigg2refs_file_url='http://bigg.ucsd.edu/static/namespace/bigg_models_reactions.txt'
 
         if not os.path.exists(bigg2refs_file):
             self.download_file_ftp(bigg2refs_file_url, bigg2refs_file)
 
         wanted_db='reactome'
-        metadata_file = f'{self.work_dir}{SPLITTER}metadata.tsv'
+        metadata_file = f'{self.work_dir}metadata.tsv'
         bigg_metadata=self.parse_bigg(bigg2refs_file,wanted_dbs=[wanted_db])
         if not os.path.exists(metadata_file):
             with open(metadata_file,'w+') as file:
@@ -594,13 +619,13 @@ class Reference_Generator_Uniprot_Reactome(Reference_Generator):
     def workflow_function(self):
 
         uniprot_fastas_url = 'https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.fasta.gz'
-        compressed_uniprot_fastas = f'{self.work_dir}{SPLITTER}uniprot_file.xml.gz'
-        uncompressed_uniprot_fastas = f'{self.work_dir}{SPLITTER}uniprot_file.xml'
+        compressed_uniprot_fastas = f'{self.work_dir}uniprot_file.xml.gz'
+        uncompressed_uniprot_fastas = f'{self.work_dir}uniprot_file.xml'
 
         reactome2uniprot_url='https://reactome.org/download/current/UniProt2ReactomeReactions.txt'
-        reactome2uniprot_file = f'{self.work_dir}{SPLITTER}UniProt2ReactomeReactions.txt'
+        reactome2uniprot_file = f'{self.work_dir}UniProt2ReactomeReactions.txt'
 
-        hmm_file=f'{self.work_dir}{SPLITTER}uniprot_reactome.hmm'
+        hmm_file=f'{self.work_dir}uniprot_reactome.hmm'
 
 
         if os.path.exists(self.work_dir) and self.remove_files:
@@ -633,8 +658,7 @@ class Reference_Generator_Uniprot_Reactome(Reference_Generator):
         os.remove(compressed_uniprot_fastas)
         os.remove(uncompressed_uniprot_fastas)
 
-
-class Reference_Generator_Uniprot_BIGG_Reactions(Reference_Generator,Web_Connector):
+class Reference_Generator_Uniprot_BIGG(Reference_Generator,Web_Connector):
     def __init__(self,work_dir,remove_files,min_seqs,number_cores,rewrite_metadata):
         Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs,number_cores=number_cores)
         Web_Connector.__init__(self)
@@ -642,136 +666,6 @@ class Reference_Generator_Uniprot_BIGG_Reactions(Reference_Generator,Web_Connect
         if not rewrite_metadata:
             self.workflow_function()
         self.write_metadata()
-
-
-    def get_all_models(self):
-        res=set()
-        models_url='http://bigg.ucsd.edu/api/v2/models'
-        json_page=self.get_url_json(models_url)
-        results=json_page['results']
-        for i in results:
-            bigg_id=i['bigg_id']
-            res.add(bigg_id)
-        return res
-
-    def get_genes_model(self,model_id):
-        res=set()
-        models_url=f'http://bigg.ucsd.edu/api/v2/models/{model_id}/genes'
-        json_page=self.get_url_json(models_url)
-        results=json_page['results']
-        for i in results:
-            bigg_id=i['bigg_id']
-            res.add(bigg_id)
-        return res
-
-    def get_gene_info(self,model_id,gene_id):
-        models_url=f'http://bigg.ucsd.edu/api/v2/models/{model_id}/genes/{gene_id}'
-        print(f'Getting info for model {model_id} and gene {gene_id}')
-        json_page=self.get_url_json(models_url)
-        protein_sequence=json_page['protein_sequence']
-        reactions=json_page['reactions']
-        reactions_bigg=set()
-        for i in reactions:
-            bigg_id=i['bigg_id']
-            reactions_bigg.add(bigg_id)
-        return [gene_id,protein_sequence,reactions_bigg]
-
-    def gene_info_worker_function(self, queue, master_pid):
-        while True:
-            record = queue.pop(0)
-            if record is None: break
-            arg1, arg2 = record
-            self.mp_results.append(self.get_gene_info(arg1, arg2))
-
-    def launch_reaction_info_retrieval(self, model_id, genes_list):
-        for gene_id in genes_list:
-            self.queue.append([model_id, gene_id])
-        self.processes_handler(self.gene_info_worker_function)
-        while self.mp_results:
-            yield self.mp_results.pop(0)
-
-    def export_to_fasta(self,reaction_id,gene_id,protein_sequence):
-        fasta_path = f'{self.fasta_dir}{SPLITTER}{reaction_id}.faa'
-        with open(fasta_path, 'a+') as file:
-            if protein_sequence:
-                outline = f'>{gene_id}\n{protein_sequence}\n'
-                file.write(outline)
-
-    def fasta_writer(self):
-        for model_id in self.get_all_models():
-            print(f'Getting info for model {model_id}')
-            genes_list=self.get_genes_model(model_id)
-            reactions_generator=self.launch_reaction_info_retrieval(model_id,genes_list)
-            for gene_id, protein_sequence, reactions_bigg in reactions_generator:
-                for reaction_id in reactions_bigg:
-                    self.export_to_fasta(reaction_id,gene_id,protein_sequence)
-
-    def get_hmm_names(self,hmm_path):
-        res=set()
-        with open(hmm_path) as file:
-            line=file.readline()
-            while line:
-                line=line.strip('\n')
-                if line.startswith('NAME'):
-                    hmm_name=line.split()[-1]
-                    res.add(hmm_name)
-                line=file.readline()
-        return res
-
-    def write_metadata(self):
-        bigg_file=f'{self.work_dir}{SPLITTER}bigg_models_reactions.txt'
-        bigg_url='http://bigg.ucsd.edu/static/namespace/bigg_models_reactions.txt'
-        if not os.path.exists(bigg_file):
-            self.download_file_ftp(bigg_url, bigg_file)
-        metadata_file = f'{self.work_dir}{SPLITTER}metadata.tsv'
-        bigg_metadata=self.parse_bigg(bigg_file)
-        hmm_file=f'{self.work_dir}{SPLITTER}bigg.hmm'
-        reactions_ids=self.get_hmm_names(hmm_file)
-        if not os.path.exists(metadata_file):
-            with open(metadata_file,'w+') as file:
-                for main_id in reactions_ids:
-                    if main_id in bigg_metadata:
-                        line = [main_id,'|']
-                        for db in bigg_metadata[main_id]:
-                            for db_id in bigg_metadata[main_id][db]:
-                                line.append(f'{db}:{db_id}')
-                        file.write('\t'.join(line)+'\n')
-        os.remove(bigg_file)
-
-
-
-
-    def workflow_function(self):
-
-        hmm_file=f'{self.work_dir}{SPLITTER}bigg.hmm'
-
-        if os.path.exists(self.work_dir) and self.remove_files:
-            shutil.rmtree(self.work_dir)
-
-        for directory in [self.work_dir, self.fasta_dir, self.aln_dir, self.hmm_dir]:
-            Path(directory).mkdir(parents=True, exist_ok=True)
-
-        if not os.listdir(self.fasta_dir):
-            self.fasta_writer()
-
-        self.launch_fastas_msa()
-        self.launch_aln_hmmer()
-        self.merge_profiles(output_file=hmm_file)
-        print(f'Finished generating {hmm_file}')
-
-class Reference_Generator_Uniprot_BIGG_Genes(Reference_Generator,Web_Connector):
-    def __init__(self,work_dir,remove_files,min_seqs,number_cores,rewrite_metadata):
-        Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs,number_cores=number_cores)
-        Web_Connector.__init__(self)
-
-        self.mp_results = self.manager.list()
-        if not rewrite_metadata:
-            self.workflow_function()
-        self.write_metadata()
-
-
-
-
 
     def get_all_models(self):
         res=set()
@@ -825,8 +719,8 @@ class Reference_Generator_Uniprot_BIGG_Genes(Reference_Generator,Web_Connector):
             yield self.mp_results.pop(0)
 
     def export_to_fasta(self,model_id,gene_id,protein_sequence,dna_sequence):
-        fasta_path_aa = f'{self.fasta_dir}{SPLITTER}{model_id}.faa_pre'
-        fasta_path_nt = f'{self.fasta_dir}{SPLITTER}{model_id}.fna'
+        fasta_path_aa = f'{self.fasta_dir}{model_id}.faa_pre'
+        fasta_path_nt = f'{self.fasta_dir}{model_id}.fna'
         with open(fasta_path_aa, 'a+') as file:
             outline = f'>{gene_id}\n{protein_sequence}\n'
             file.write(outline)
@@ -834,33 +728,13 @@ class Reference_Generator_Uniprot_BIGG_Genes(Reference_Generator,Web_Connector):
             outline = f'>{gene_id}\n{dna_sequence}\n'
             file.write(outline)
 
-    def export_bigg_faa(self):
-        fasta_folder=f'{self.fasta_dir}{SPLITTER}'
-        faa_list=[i for i in os.listdir(fasta_folder) if i.endswith('.faa')]
-        bigg_path = f'{self.work_dir}{SPLITTER}bigg.faa'
-        with open(bigg_path, 'a+') as file:
-            for faa in faa_list:
-                faa_path=f'{fasta_folder}{faa}'
-                all_seqs_generator=self.read_protein_fasta_generator(faa_path)
-                for seq_id,protein_sequence in all_seqs_generator:
-                        outline = f'>{seq_id}\n{protein_sequence}\n'
-                        file.write(outline)
-
-    def run_command(self,command,shell=False):
-        process = subprocess.run(command, shell=shell)
-        return process
-
-
-
-    def run_prodigal(self):
-        fasta_folder=f'{self.fasta_dir}{SPLITTER}'
-        fna_list=[i for i in os.listdir(fasta_folder) if i.endswith('.fna')]
-        for fna in fna_list:
-            faa=fna.replace('.fna','.faa_pro')
-            prodigal_command=f'prodigal -i {fasta_folder}{fna} -a {fasta_folder}{faa}'
-            self.run_command(prodigal_command,shell=True)
 
     def merge_faa(self):
+        '''
+        this will merge the two fastas, one generated with the protein sequences extracted from bigg,
+        the other with the protein sequences predicted with prodigal
+        the resulting fasta will add protein sequences from bigg per gene, if not available it adds protein sequences from prodigal
+        '''
         fasta_folder=f'{self.fasta_dir}{SPLITTER}'
         model_list=[i.replace('.fna','') for i in os.listdir(fasta_folder) if i.endswith('.fna')]
         for model_id in model_list:
@@ -888,6 +762,115 @@ class Reference_Generator_Uniprot_BIGG_Genes(Reference_Generator,Web_Connector):
                         outline = f'>{seq_id}\n{protein_sequence}\n'
                         file.write(outline)
 
+    def export_bigg_faa(self):
+        '''
+        merges all the sequences into one big file
+        '''
+        fasta_folder=f'{self.fasta_dir}{SPLITTER}'
+        faa_list=[i for i in os.listdir(fasta_folder) if i.endswith('.faa')]
+        bigg_path = f'{self.work_dir}bigg.faa'
+        with open(bigg_path, 'a+') as file:
+            for faa in faa_list:
+                faa_path=f'{fasta_folder}{faa}'
+                all_seqs_generator=self.read_protein_fasta_generator(faa_path)
+                for seq_id,protein_sequence in all_seqs_generator:
+                        outline = f'>{seq_id}\n{protein_sequence}\n'
+                        file.write(outline)
+
+
+class Reference_Generator_Uniprot_BIGG_Reactions(Reference_Generator_Uniprot_BIGG,Reference_Generator,Web_Connector):
+    def __init__(self,work_dir,remove_files,min_seqs,number_cores,rewrite_metadata):
+        Reference_Generator_Uniprot_BIGG.__init__(self,work_dir,remove_files,min_seqs,number_cores,rewrite_metadata)
+
+
+
+    def fasta_writer(self):
+        reactions_genes={}
+        for model_id in self.get_all_models():
+            print(f'Getting info for model {model_id}')
+            genes_list=self.get_genes_model(model_id)
+            reactions_generator=self.launch_reaction_info_retrieval(model_id,genes_list)
+            for gene_id, protein_sequence,dna_sequence, reactions_bigg in reactions_generator:
+                self.export_to_fasta(model_id,gene_id, protein_sequence,dna_sequence)
+                for reaction_id in reactions_bigg:
+                    if reaction_id not in reactions_genes: reactions_genes[reaction_id] = set()
+                    reactions_genes[reaction_id].add(gene_id)
+        self.run_prodigal()
+        self.merge_faa()
+        self.export_bigg_faa()
+        self.split_fastas_to_reactions(reactions_genes)
+
+    def split_fastas_to_reactions(self,reactions_genes):
+        fasta_folder=f'{self.fasta_dir}'.rstrip(SPLITTER)
+        shutil.move(fasta_folder,f'{fasta_folder}_models')
+        Path(fasta_folder).mkdir(parents=True, exist_ok=True)
+        bigg_path = f'{self.work_dir}bigg.faa'
+        all_sequences=self.read_protein_fasta(bigg_path)
+        for reaction_id in reactions_genes:
+            for gene_id in reactions_genes[reaction_id]:
+                protein_sequence=all_sequences[gene_id]
+                fasta_path = f'{fasta_folder}{SPLITTER}{reaction_id}.faa'
+                with open(fasta_path, 'a+') as file:
+                    outline = f'>{gene_id}\n{protein_sequence}\n'
+                    file.write(outline)
+
+
+
+    def get_hmm_names(self,hmm_path):
+        res=set()
+        with open(hmm_path) as file:
+            line=file.readline()
+            while line:
+                line=line.strip('\n')
+                if line.startswith('NAME'):
+                    hmm_name=line.split()[-1]
+                    res.add(hmm_name)
+                line=file.readline()
+        return res
+
+    def write_metadata(self):
+        bigg_file=f'{self.work_dir}bigg_models_reactions.txt'
+        bigg_url='http://bigg.ucsd.edu/static/namespace/bigg_models_reactions.txt'
+        if not os.path.exists(bigg_file):
+            self.download_file_ftp(bigg_url, bigg_file)
+        metadata_file = f'{self.work_dir}metadata.tsv'
+        bigg_metadata=self.parse_bigg(bigg_file)
+        hmm_file=f'{self.work_dir}bigg.hmm'
+        reactions_ids=self.get_hmm_names(hmm_file)
+        if not os.path.exists(metadata_file):
+            with open(metadata_file,'w+') as file:
+                for main_id in reactions_ids:
+                    if main_id in bigg_metadata:
+                        line = [main_id,'|']
+                        for db in bigg_metadata[main_id]:
+                            for db_id in bigg_metadata[main_id][db]:
+                                line.append(f'{db}:{db_id}')
+                        file.write('\t'.join(line)+'\n')
+        os.remove(bigg_file)
+
+
+    def workflow_function(self):
+        hmm_file=f'{self.work_dir}bigg.hmm'
+        if os.path.exists(self.work_dir) and self.remove_files:
+            shutil.rmtree(self.work_dir)
+        for directory in [self.work_dir, self.fasta_dir, self.aln_dir, self.hmm_dir]:
+            Path(directory).mkdir(parents=True, exist_ok=True)
+
+        if not os.listdir(self.fasta_dir):
+            self.fasta_writer()
+
+        self.launch_fastas_msa()
+        self.launch_aln_hmmer()
+        self.merge_profiles(output_file=hmm_file)
+        print(f'Finished generating {hmm_file}')
+
+class Reference_Generator_Uniprot_BIGG_Genes(Reference_Generator_Uniprot_BIGG,Reference_Generator,Web_Connector):
+    def __init__(self,work_dir,remove_files,min_seqs,number_cores,rewrite_metadata):
+        Reference_Generator_Uniprot_BIGG.__init__(self,work_dir,remove_files,min_seqs,number_cores,rewrite_metadata)
+
+
+
+
 
     def fasta_writer(self):
         self.genes_reactions={}
@@ -905,11 +888,11 @@ class Reference_Generator_Uniprot_BIGG_Genes(Reference_Generator,Web_Connector):
         self.export_bigg_faa()
 
     def write_metadata(self):
-        bigg_file=f'{self.work_dir}{SPLITTER}bigg_models_reactions.txt'
+        bigg_file=f'{self.work_dir}bigg_models_reactions.txt'
         bigg_url='http://bigg.ucsd.edu/static/namespace/bigg_models_reactions.txt'
         if not os.path.exists(bigg_file):
             self.download_file_ftp(bigg_url, bigg_file)
-        metadata_file = f'{self.work_dir}{SPLITTER}metadata.tsv'
+        metadata_file = f'{self.work_dir}metadata.tsv'
         bigg_metadata=self.parse_bigg(bigg_file)
         if not os.path.exists(metadata_file):
             with open(metadata_file,'w+') as file:
@@ -924,31 +907,22 @@ class Reference_Generator_Uniprot_BIGG_Genes(Reference_Generator,Web_Connector):
                     file.write('\t'.join(line)+'\n')
         os.remove(bigg_file)
 
-    def download_diamond(self):
-        diamond_url = 'http://github.com/bbuchfink/diamond/releases/download/v2.0.9/diamond-linux64.tar.gz'
-        archive_path=f'{self.work_dir}{SPLITTER}diamond-linux64.tar.gz'
-        with requests.get(diamond_url, stream=True) as r:
-            with open(archive_path, 'wb') as f:
-                shutil.copyfileobj(r.raw, f)
-        shutil.unpack_archive(archive_path,extract_dir=self.work_dir)
-        os.remove(archive_path)
+
 
     def workflow_function(self):
-
-
         if os.path.exists(self.work_dir) and self.remove_files:
             shutil.rmtree(self.work_dir)
         for directory in [self.work_dir, self.fasta_dir]:
             Path(directory).mkdir(parents=True, exist_ok=True)
 
-        dmnd_file=f'{self.work_dir}{SPLITTER}bigg'
-        fasta_path = f'{self.work_dir}{SPLITTER}bigg.faa'
+        dmnd_file=f'{self.work_dir}bigg'
+        fasta_path = f'{self.work_dir}bigg.faa'
 
         if not os.listdir(self.fasta_dir):
             self.fasta_writer()
 
         self.download_diamond()
-        diamond_path=f'{self.work_dir}{SPLITTER}diamond'
+        diamond_path=f'{self.work_dir}diamond'
         dmnd_command=f'{diamond_path} makedb --in {fasta_path} -d {dmnd_file}'
         subprocess.run(dmnd_command.split())
         os.remove(diamond_path)
