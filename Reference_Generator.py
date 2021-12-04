@@ -17,7 +17,7 @@ from gzip import open as gzip_open
 
 __author__ = "Pedro Queirós"
 __status__ = "Production"
-__credits__ = ['Pedro Queirós','Polina Novikova']
+__credits__ = ['Pedro Queirós']
 SPLITTER='/'
 
 
@@ -38,6 +38,14 @@ class Reference_Generator():
         self.fasta_dir = f'{self.work_dir}fastas{SPLITTER}'
         self.aln_dir = f'{self.work_dir}aln{SPLITTER}'
         self.hmm_dir = f'{self.work_dir}hmm{SPLITTER}'
+        self.cluster_dir = f'{self.work_dir}cluster{SPLITTER}'
+        self.tmp_dir = f'{self.work_dir}tmp{SPLITTER}'
+        if os.path.exists(self.work_dir) and self.remove_files:
+            shutil.rmtree(self.work_dir)
+        for directory in [self.work_dir, self.fasta_dir, self.aln_dir, self.hmm_dir,self.cluster_dir,self.tmp_dir]:
+            Path(directory).mkdir(parents=True, exist_ok=True)
+
+
 
     def run_command(self,command,shell=False):
         process = subprocess.run(command, shell=shell)
@@ -50,6 +58,64 @@ class Reference_Generator():
             faa=fna.replace('.fna','.faa_pro')
             prodigal_command=f'prodigal -i {fasta_folder}{fna} -a {fasta_folder}{faa}'
             self.run_command(prodigal_command,shell=True)
+
+    def read_mmseqs_cluster_tsv(self,cluster_tsv_path):
+        clusters={}
+        with open(cluster_tsv_path) as file:
+            for line in file:
+                line=line.strip('\n')
+                representative_seq,other_seq=line.split('\t')
+                if representative_seq not in clusters: clusters[representative_seq]=set()
+                clusters[representative_seq].add(other_seq)
+        res={}
+        c=0
+        for representative_seq in clusters:
+            res[c]={representative_seq}
+            res[c].update(clusters[representative_seq])
+            c+=1
+        return res
+
+    def generate_clusters_fasta(self,cluster,clusters,cluster_seqs):
+        for c in clusters:
+            cluster_fasta_path = f'{self.fasta_dir}{cluster}_{c}.faa'
+            with open(cluster_fasta_path,'a+') as file:
+                for seq_id in clusters[c]:
+                    seq=cluster_seqs[seq_id]
+                    seq_line=f'>{seq_id}\n{seq}\n'
+                    file.write(seq_line)
+
+
+    def split_fastas_by_clusters(self):
+        fasta_folder=f'{self.fasta_dir}'.rstrip(SPLITTER)
+        shutil.move(fasta_folder,f'{fasta_folder}_raw_fastas')
+        Path(fasta_folder).mkdir(parents=True, exist_ok=True)
+        for cluster in os.listdir(self.cluster_dir):
+            cluster_tsv=f'{self.cluster_dir}{cluster}{SPLITTER}{cluster}.clu_cluster.tsv'
+            cluster_fasta=f'{self.cluster_dir}{cluster}{SPLITTER}{cluster}.clu_all_seqs.fasta'
+            clusters=self.read_mmseqs_cluster_tsv(cluster_tsv)
+            cluster_seqs = self.read_protein_fasta(cluster_fasta)
+            self.generate_clusters_fasta(cluster,clusters,cluster_seqs)
+
+
+    def run_mmseqs(self):
+        faa_list=[i for i in os.listdir(self.fasta_dir) if i.endswith('.faa')]
+        for faa in faa_list:
+            current_cluster_dir = f'{self.cluster_dir}{faa}{SPLITTER}'.replace('.faa','')
+            Path(current_cluster_dir).mkdir(parents=True, exist_ok=True)
+
+            db=faa.replace('.faa','.db')
+            cluster=faa.replace('.faa','.clu')
+            tsv=faa.replace('.faa','.tsv')
+            #mmseqs_createdb=f'mmseqs createdb {self.fasta_dir}{faa} {current_cluster_dir}{db}'
+            #self.run_command(mmseqs_createdb,shell=True)
+            #mmseqs_cluster=f'mmseqs cluster {current_cluster_dir}{db} {current_cluster_dir}{cluster} {self.tmp_dir}'
+            #self.run_command(mmseqs_cluster,shell=True)
+            #mmseqs_tsv=f'mmseqs createtsv {current_cluster_dir}{db} {current_cluster_dir}{db} {current_cluster_dir}{cluster} {current_cluster_dir}{tsv} {self.tmp_dir}'
+            #self.run_command(mmseqs_tsv,shell=True)
+
+            mmseqs_tsv=f'mmseqs easy-cluster {self.fasta_dir}{faa}  {current_cluster_dir}{cluster} {self.tmp_dir}'
+            self.run_command(mmseqs_tsv,shell=True)
+
 
 
     def download_diamond(self):
@@ -124,7 +190,9 @@ class Reference_Generator():
                             query = query.split('|')[1]
                         if protein_fasta_path.endswith('_pro'):
                             query = query.split('_')[0]
-                        yield query,''.join(seq).upper()
+                        seq=''.join(seq).upper()
+                        if seq:
+                            yield query,seq
                         seq=[]
                     query=line.replace('>','').strip()
                 else:
@@ -135,7 +203,9 @@ class Reference_Generator():
                     query=query.split('|')[1]
                     if protein_fasta_path.endswith('_pro'):
                         query = query.split('_')[0]
-                yield query, ''.join(seq).upper()
+                seq = ''.join(seq).upper()
+                if seq:
+                    yield query, seq
 
     #low memory footprint_version
     def read_protein_fasta(self,protein_fasta_path):
@@ -160,8 +230,8 @@ class Reference_Generator():
             if query:
                 if '|' in query:
                     query=query.split('|')[1]
-                    if protein_fasta_path.endswith('_pro'):
-                        query = query.split('_')[0]
+                if protein_fasta_path.endswith('_pro'):
+                    query = query.split('_')[0]
                 res[query] = ''.join(seq).upper()
         return res
 
@@ -187,18 +257,23 @@ class Reference_Generator():
     def msa(self,fasta_file):
         outfile = fasta_file.replace('.faa', '.aln')
         outfile_path = f'{self.aln_dir}{os.path.basename(outfile)}'
+        print(fasta_file,outfile_path)
         seqs_count = self.get_seqs_count(fasta_file)
+
         if seqs_count >= self.min_seqs:
-            # muscle for small-mid aligns
-            command=None
-            if seqs_count <= 500:
-                command = f'muscle -in {fasta_file} -clwout {outfile_path} -clwstrict'
-            # clustal omega for larger
+            if seqs_count == 1:
+                shutil.copyfile(fasta_file, outfile_path)
             else:
-                command = f'clustalo -i {fasta_file} -o {outfile_path} --seqtype Protein --outfmt clu'
-            if command:
-                print('Running command:',command)
-                subprocess.run(command, shell=True)
+                # muscle for small-mid aligns
+                command=None
+                if seqs_count <= 500:
+                    command = f'muscle -in {fasta_file} -clwout {outfile_path} -clwstrict'
+                # clustal omega for larger
+                else:
+                    command = f'clustalo -i {fasta_file} -o {outfile_path} --seqtype Protein --outfmt clu'
+                if command:
+                    print('Running command:',command)
+                    subprocess.run(command, shell=True)
 
     def msa_worker_function(self,queue, master_pid):
         while True:
@@ -310,7 +385,7 @@ class Reference_Generator():
                 line = file.readline()
         return res
 
-
+#MSAs need to be checked for quality
 class Reference_Generator_Uniprot_EC(Reference_Generator):
     def __init__(self,work_dir,remove_files,min_seqs,number_cores,rewrite_metadata):
         Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs,number_cores=number_cores)
@@ -318,42 +393,176 @@ class Reference_Generator_Uniprot_EC(Reference_Generator):
             self.workflow_function()
         self.write_metadata()
 
-
-    def uniprot_xml_parser(self,input_file_xml):
-        dict_accession_seqs = dict()
-        dict_ec_accession = dict()
-
-        with open(input_file_xml, 'r') as file:
+    def parse_seq(self,file):
+        res=[]
+        line=file.readline()
+        line_type, line_value = line[0:2], line[5:].strip().strip('\n')
+        res.append(line_value)
+        while not line.startswith('//'):
+            line_type, line_value = line[0:2], line[5:].strip().strip('\n')
+            res.append(line_value)
             line = file.readline()
-            while line:
-                line = line.strip('\n').strip()
-                if line.startswith('<accession>'):
-                    regex_pattern = re.compile('>([A-Z]|\d)+<')
-                    accession = re.search(regex_pattern, line).group().strip('<>')
-                elif line.startswith('<sequence'):
-                    sequence = line.split('>')[1]
-                    sequence = sequence.split('<')[0]
-                    dict_accession_seqs[accession] = sequence
+        res=''.join(res)
+        res=res.replace(' ','')
+        res=res.strip()
+        return res
 
-                elif line.startswith('<ecNumber'):
-                    ec_number = line.split('>')[1]
-                    ec_number = ec_number.split('<')[0]
-                    if '-' not in ec_number and not re.search('[A-Za-z]',ec_number):
-                        if ec_number not in dict_ec_accession:
-                            dict_ec_accession[ec_number] = set()
-                        dict_ec_accession[ec_number].add(accession)
+    def parse_function(self,file):
+        res = []
+        line = file.readline()
+        line_type, line_value = line[0:2], line[5:].strip().strip('\n')
+        start_recording=False
+        while line_type == 'CC':
+            if line_value.startswith('-!- FUNCTION:'):
+                temp=[]
+                temp.append(line_value)
+                start_recording=True
+            elif start_recording and not line_value.startswith('-!-'):
+                temp.append(line_value)
+            elif start_recording and line_value.startswith('-!-'):
+                temp=' '.join(temp)
+                temp=temp.replace('-!- FUNCTION:','')
+                temp=temp.split('{ECO:')[0]
+                temp=temp.strip()
+                isoform_search=re.search('\[Isoform \d+\]:',temp)
+                if isoform_search:
+                    isoform_search=isoform_search.group()
+                    temp=temp.replace(isoform_search,'')
+                pubmed_search=re.findall('PubMed:\d+,?\s?',temp)
+                if pubmed_search:
+                    for i in pubmed_search:
+                        temp=temp.replace(i,'')
+                    temp=temp.replace('()','')
+                    temp=temp.replace(' .','.')
+                temp=temp.strip()
+                res.append(temp)
+                start_recording=False
+            line_type, line_value = line[0:2], line[5:].strip().strip('\n')
+            line = file.readline()
+        return res
 
-                elif line.startswith('<dbReference') and 'type="EC"' in line:
-                    db_ref = line.split('id="')[1]
-                    db_ref = db_ref.split('"')[0]
-                    if '-' not in db_ref and not re.search('[A-Za-z]',db_ref):
-                        if db_ref not in dict_ec_accession:
-                            dict_ec_accession[db_ref] = set()
-                        dict_ec_accession[db_ref].add(accession)
+    def yield_entries(self,uniprot_data):
+        seq_id, db_type, taxon_id, sequence = None, None, None,None
+        res={}
+        wanted_db_types=[
+            'eggnog',
+            'go',
+            'embl',
+            'kegg_gene',
+            'ncbi_gene',
+            'pfam',
+            'interpro',
+            'hamap',
+            'refseq',
+            'panther',
+            'ensemblbacteria',
+            'antibodypedia',
+            'orthodb',
+            'reactome',
+            'genecards',
+            'malacards',
+            'prints',
+            'tigrfams',
+            'prosite',
+            'string',
+            'biogrid',
+            'smart',
+            'gene3d',
+            'peptideatlas',
+            'proteomicsdb',
+            'phosphositeplus',
+            'biocyc',
+            'brenda',
+            'pdb',
+            'ensembl',
+            'ensemblmetazoa',
+            'ensemblplants',
+            'expressionatlas',
+            'genevisible',
+            'ensemblfungi',
+            'plantreactome',
+            'swisslipids',
+            'pathwaycommons',
+            'chembl',
+            'patric',
+            'genewiki',
+            'moondb',
+                         ]
+        with open(uniprot_data) as file:
+            for line in file:
+                db_type = None
+                line=line.strip('\n')
+                line_type, line_value = line[0:2], line[5:].strip()
+                if line_type=='ID':
+                    db_type=None
+                    if seq_id:
+                        if 'eggnog' in res:
+                            for eggnog_id in res['eggnog']:
+                                if re.search('arCOG\d+',eggnog_id):
+                                    if 'arcog' not in res: res['arcog']=set()
+                                    res['arcog'].add(eggnog_id)
+                                elif re.search('COG\d+',eggnog_id):
+                                    if 'cog' not in res: res['cog']=set()
+                                    res['cog'].add(eggnog_id)
+                        yield seq_id,taxon_id,res,sequence
+                    res={}
+                    seq_id,db_type,taxon_id,sequence = None,None,None,None
+                    seq_id=line_value.split()[0]
 
-                line = file.readline()
+                elif line_type == 'AC':
+                    line_value=line_value.split(';')
+                    db_type='uniprot'
+                elif line_type == 'GN' and line_value.startswith('Name='):
+                    db_type = 'uniprot_gene'
+                    line_value = line_value.replace('Name=', '').split(';')[0]
+                    line_value = line_value.split('{ECO:')[0]
+                elif line_type == 'OX' and line_value.startswith('NCBI_TaxID='):
+                    db_type = None
+                    line_value=line_value.replace('NCBI_TaxID=','').strip()
+                    line_value = line_value.split('{ECO:')[0]
+                    line_value=line_value.strip(';').strip()
+                    taxon_id=line_value
 
-            return dict_accession_seqs, dict_ec_accession
+                elif line_type == 'DE':
+                    db_type=None
+                    if line_value.startswith('RecName') or line_value.startswith('AltName'):
+                        db_type = 'description'
+                        line_value=line_value.replace('RecName:','').strip()
+                        line_value=line_value.replace('AltName:','').strip()
+                        line_value=line_value.replace('Full=','').strip()
+                        line_value=line_value.split('{ECO:')[0]
+                        line_value=line_value.strip(';')
+                    elif line_value.startswith('EC='):
+                        db_type = 'enzyme_ec'
+                        line_value=line_value.replace('EC=','').strip().split()[0]
+                        line_value=line_value.strip(';')
+                elif line_type=='CC':
+                    db_type = 'description'
+                    line_value=self.parse_function(file)
+                elif line_type=='SQ':
+                    db_type=None
+                    sequence=self.parse_seq(file)
+                elif line_type=='DR':
+                    #database reference
+                    db_type,line_value= line_value.split(';')[0:2]
+                    db_type,line_value=db_type.strip(),line_value.strip()
+                    db_type=db_type.lower()
+                    if db_type=='go':
+                        line_value=line_value.replace('GO:','')
+                    elif db_type=='kegg': db_type='kegg_gene'
+                    elif db_type=='geneid': db_type='ncbi_gene'
+                    elif db_type=='tigrfams': db_type='tigrfam'
+                    if db_type not in wanted_db_types: db_type=None
+                if db_type:
+                    if not isinstance(line_value,list): line_value=[line_value]
+                    if db_type not in res: res[db_type]=set()
+                    line_value=[i.strip() for i in line_value]
+                    line_value=[i for i in line_value if i]
+                    res[db_type].update(line_value)
+        yield seq_id, taxon_id, res, sequence
+
+
+
 
 
     def fasta_writer(self,dict_accession_seqs, dict_ec_accession):
@@ -366,6 +575,8 @@ class Reference_Generator_Uniprot_EC(Reference_Generator):
                             sequence = dict_accession_seqs[accession]
                             outline = f'>{accession}\n{sequence}\n'
                             file.write(outline)
+        self.run_mmseqs()
+        self.split_fastas_by_clusters()
 
     def write_metadata(self):
         bigg2refs_file=f'{self.work_dir}bigg_models_reactions.txt'
@@ -394,11 +605,7 @@ class Reference_Generator_Uniprot_EC(Reference_Generator):
         uncompressed_uniprot = f'{self.work_dir}uniprot_file.xml'
         hmm_file=f'{self.work_dir}uniprot_ec.hmm'
 
-        if os.path.exists(self.work_dir) and self.remove_files:
-            shutil.rmtree(self.work_dir)
 
-        for directory in [self.work_dir, self.fasta_dir, self.aln_dir, self.hmm_dir]:
-            Path(directory).mkdir(parents=True, exist_ok=True)
 
         if not os.path.exists(compressed_uniprot) or not os.path.exists(uncompressed_uniprot):
             self.download_file_ftp(uniprot_url, compressed_uniprot)
@@ -415,7 +622,301 @@ class Reference_Generator_Uniprot_EC(Reference_Generator):
         self.merge_profiles(output_file=hmm_file)
         print(f'Finished generating {hmm_file}')
 
+#MSAs need to be checked for quality
+class Reference_Generator_Uniprot(Reference_Generator):
+    def __init__(self,work_dir,remove_files,min_seqs,number_cores,rewrite_metadata,db):
+        Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs,number_cores=number_cores)
+        self.db=db
+        self.workflow_function()
 
+    def parse_seq(self,file):
+        res=[]
+        line=file.readline()
+        line_type, line_value = line[0:2], line[5:].strip().strip('\n')
+        res.append(line_value)
+        while not line.startswith('//'):
+            line_type, line_value = line[0:2], line[5:].strip().strip('\n')
+            res.append(line_value)
+            line = file.readline()
+        res=''.join(res)
+        res=res.replace(' ','')
+        res=res.strip()
+        return res
+
+    def parse_function(self,file):
+        res = []
+        line = file.readline()
+        line_type, line_value = line[0:2], line[5:].strip().strip('\n')
+        start_recording=False
+        while line_type == 'CC':
+            if line_value.startswith('-!- FUNCTION:'):
+                temp=[]
+                temp.append(line_value)
+                start_recording=True
+            elif start_recording and not line_value.startswith('-!-'):
+                temp.append(line_value)
+            elif start_recording and line_value.startswith('-!-'):
+                temp=' '.join(temp)
+                temp=temp.replace('-!- FUNCTION:','')
+                temp=temp.split('{ECO:')[0]
+                temp=temp.strip()
+                isoform_search=re.search('\[Isoform \d+\]:',temp)
+                if isoform_search:
+                    isoform_search=isoform_search.group()
+                    temp=temp.replace(isoform_search,'')
+                pubmed_search=re.findall('PubMed:\d+,?\s?',temp)
+                if pubmed_search:
+                    for i in pubmed_search:
+                        temp=temp.replace(i,'')
+                    temp=temp.replace('()','')
+                    temp=temp.replace(' .','.')
+                temp=temp.strip()
+                res.append(temp)
+                start_recording=False
+            line_type, line_value = line[0:2], line[5:].strip().strip('\n')
+            line = file.readline()
+        return res
+
+    def yield_entries(self,uniprot_data):
+        seq_id, db_type, taxon_id, sequence = None, None, None,None
+        res={}
+        wanted_db_types=[
+            'eggnog',
+            'go',
+            'embl',
+            'kegg_gene',
+            'ncbi_gene',
+            'pfam',
+            'interpro',
+            'hamap',
+            'refseq',
+            'panther',
+            'ensemblbacteria',
+            'antibodypedia',
+            'orthodb',
+            'reactome',
+            'genecards',
+            'malacards',
+            'prints',
+            'tigrfams',
+            'prosite',
+            'string',
+            'biogrid',
+            'smart',
+            'gene3d',
+            'peptideatlas',
+            'proteomicsdb',
+            'phosphositeplus',
+            'biocyc',
+            'brenda',
+            'pdb',
+            'ensembl',
+            'ensemblmetazoa',
+            'ensemblplants',
+            'expressionatlas',
+            'genevisible',
+            'ensemblfungi',
+            'plantreactome',
+            'swisslipids',
+            'pathwaycommons',
+            'chembl',
+            'patric',
+            'genewiki',
+            'moondb',
+                         ]
+        with open(uniprot_data) as file:
+            for line in file:
+                db_type = None
+                line=line.strip('\n')
+                line_type, line_value = line[0:2], line[5:].strip()
+                if line_type=='ID':
+                    db_type=None
+                    if seq_id:
+                        if 'eggnog' in res:
+                            for eggnog_id in res['eggnog']:
+                                if re.search('arCOG\d+',eggnog_id):
+                                    if 'arcog' not in res: res['arcog']=set()
+                                    res['arcog'].add(eggnog_id)
+                                elif re.search('COG\d+',eggnog_id):
+                                    if 'cog' not in res: res['cog']=set()
+                                    res['cog'].add(eggnog_id)
+                        yield seq_id,taxon_id,res,sequence
+                    res={}
+                    seq_id,db_type,taxon_id,sequence = None,None,None,None
+                    seq_id=line_value.split()[0]
+
+                elif line_type == 'AC':
+                    line_value=line_value.split(';')
+                    db_type='uniprot'
+                elif line_type == 'GN' and line_value.startswith('Name='):
+                    db_type = 'uniprot_gene'
+                    line_value = line_value.replace('Name=', '').split(';')[0]
+                    line_value = line_value.split('{ECO:')[0]
+                elif line_type == 'OX' and line_value.startswith('NCBI_TaxID='):
+                    db_type = None
+                    line_value=line_value.replace('NCBI_TaxID=','').strip()
+                    line_value = line_value.split('{ECO:')[0]
+                    line_value=line_value.strip(';').strip()
+                    taxon_id=line_value
+
+                elif line_type == 'DE':
+                    db_type=None
+                    if line_value.startswith('RecName') or line_value.startswith('AltName'):
+                        db_type = 'description'
+                        line_value=line_value.replace('RecName:','').strip()
+                        line_value=line_value.replace('AltName:','').strip()
+                        line_value=line_value.replace('Full=','').strip()
+                        line_value=line_value.split('{ECO:')[0]
+                        line_value=line_value.strip(';')
+                    elif line_value.startswith('EC='):
+                        db_type = 'enzyme_ec'
+                        line_value=line_value.replace('EC=','').strip().split()[0]
+                        line_value=line_value.strip(';')
+                elif line_type=='CC':
+                    db_type = 'description'
+                    line_value=self.parse_function(file)
+                elif line_type=='SQ':
+                    db_type=None
+                    sequence=self.parse_seq(file)
+                elif line_type=='DR':
+                    #database reference
+                    db_type,line_value= line_value.split(';')[0:2]
+                    db_type,line_value=db_type.strip(),line_value.strip()
+                    db_type=db_type.lower()
+                    if db_type=='go':
+                        line_value=line_value.replace('GO:','')
+                    elif db_type=='kegg': db_type='kegg_gene'
+                    elif db_type=='geneid': db_type='ncbi_gene'
+                    elif db_type=='tigrfams': db_type='tigrfam'
+                    if db_type not in wanted_db_types: db_type=None
+                if db_type:
+                    if not isinstance(line_value,list): line_value=[line_value]
+                    if db_type not in res: res[db_type]=set()
+                    line_value=[i.strip() for i in line_value]
+                    line_value=[i for i in line_value if i]
+                    res[db_type].update(line_value)
+        yield seq_id, taxon_id, res, sequence
+
+    def output_uniprot_data_hmm(self,data_generator,db_type):
+        for seq_id,taxon_id,seq_metadata,sequence in data_generator:
+            if db_type in seq_metadata:
+                for db_id in seq_metadata[db_type]:
+                    current_folder = f'{self.fasta_dir}{db_id}{SPLITTER}'
+                    Path(current_folder).mkdir(parents=True, exist_ok=True)
+                    current_fasta = f'{current_folder}{db_id}.faa'
+                    with open(current_fasta, 'a+') as file:
+                        line = f'>{seq_id}\n{sequence}'
+                        file.write(f'{line}\n')
+        self.run_mmseqs()
+        self.split_fastas_by_clusters()
+
+
+
+
+    def create_hmms(self,db_type):
+        data_url = 'https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.dat.gz'
+        compressed_data = f'{self.work_dir}uniprot_sprot.dat.gz'
+        uncompressed_data = f'{self.work_dir}uniprot_sprot.dat'
+        if not os.path.exists(compressed_data) or not os.path.exists(uncompressed_data):
+            print(f'Downloading data:\n{data_url}')
+            self.download_file_ftp(data_url, compressed_data)
+
+        if not os.path.exists(uncompressed_data):
+            print(f'Uncompressing data:\n{compressed_data}')
+            self.unpack_gz(compressed_data, uncompressed_data)
+        data_generator=self.yield_entries(uncompressed_data)
+        self.output_uniprot_data_hmm(data_generator,db_type)
+        self.launch_fastas_msa()
+        self.launch_aln_hmmer()
+        hmm_file=f'{self.work_dir}uniprot_ec.hmm'
+        self.merge_profiles(output_file=hmm_file)
+        print(f'Finished generating {hmm_file}')
+
+
+    def output_uniprot_data_taxa(self,data_generator):
+        general_taxon=self.get_ncbi_domains()
+        for seq_id,taxon_id,seq_metadata,sequence in data_generator:
+            c+=1
+            if not taxon_id:
+                current_folder=f'{self.fasta_dir}uniprotG{SPLITTER}'
+                Path(current_folder).mkdir(parents=True, exist_ok=True)
+                current_fasta=f'{current_folder}uniprotG_merged.faa'
+                current_metadata=f'{current_folder}metadata.tsv'
+            else:
+                current_folder=f'{self.fasta_dir}{taxon_id}{SPLITTER}'
+                Path(current_folder).mkdir(parents=True, exist_ok=True)
+                current_fasta=f'{current_folder}{taxon_id}_merged.faa'
+                current_metadata=f'{current_folder}metadata.faa'
+            with open(current_fasta, 'a+') as file:
+                line = f'>{seq_id}\n{sequence}'
+                file.write(f'{line}\n')
+
+            with open(current_metadata, 'a+') as file:
+                temp = [f'{seq_id}','|']
+                for db in seq_metadata:
+                    for db_id in seq_metadata[db]:
+                        temp.append(f'{db}:{db_id}')
+                line='\t'.join(temp)
+                file.write(f'{line}\n')
+
+    def output_uniprot_data_dmnd(self,data_generator,fasta_file,metadata_file):
+        if os.path.exists(fasta_file):
+            os.remove(fasta_file)
+        if os.path.exists(metadata_file):
+            os.remove(metadata_file)
+
+        for seq_id,taxon_id,seq_metadata,sequence in data_generator:
+            with open(fasta_file, 'a+') as file:
+                line = f'>{seq_id}\n{sequence}'
+                file.write(f'{line}\n')
+            with open(metadata_file, 'a+') as file:
+                temp = [f'{seq_id}', '|']
+                for db in seq_metadata:
+                    for db_id in seq_metadata[db]:
+                        temp.append(f'{db}:{db_id}')
+                line = '\t'.join(temp)
+                file.write(f'{line}\n')
+
+    def create_diamond_dbs(self):
+        if self.db=='swissprot':
+            data_url='https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.dat.gz'
+            compressed_data = f'{self.work_dir}uniprot_sprot.dat.gz'
+            uncompressed_data = f'{self.work_dir}uniprot_sprot.dat'
+        elif self.db=='trembl':
+            data_url='https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_trembl.dat.gz'
+            compressed_data = f'{self.work_dir}uniprot_trembl.dat.gz'
+            uncompressed_data = f'{self.work_dir}uniprot_trembl.dat'
+
+        if not os.path.exists(compressed_data) or not os.path.exists(uncompressed_data):
+            print(f'Downloading data:\n{data_url}')
+            self.download_file_ftp(data_url, compressed_data)
+
+        if not os.path.exists(uncompressed_data):
+            print(f'Uncompressing data:\n{compressed_data}')
+            self.unpack_gz(compressed_data, uncompressed_data)
+
+        data_generator=self.yield_entries(uncompressed_data)
+
+        fasta_file = f'{self.fasta_dir}uniprot_merged.faa'
+        metadata_file = f'{self.fasta_dir}metadata.tsv'
+        self.output_uniprot_data_dmnd(data_generator,fasta_file,metadata_file)
+
+        self.download_diamond()
+        diamond_path = f'{self.work_dir}diamond'
+        dmnd_file=fasta_file.replace('.faa','')
+        dmnd_command = f'{diamond_path} makedb --in {fasta_file} -d {dmnd_file}'
+        subprocess.run(dmnd_command.split())
+        os.remove(diamond_path)
+        print(f'Finished generating {dmnd_file}')
+
+    def workflow_function(self):
+        if self.db=='swissprot' or self.db=='trembl':
+            self.create_diamond_dbs()
+        elif self.db=='ec':
+            self.create_hmms(db_type='enzyme_ec')
+
+
+#MSAs need to be checked for quality
 class Reference_Generator_Uniprot_Rhea(Reference_Generator):
     def __init__(self,work_dir,remove_files,min_seqs,number_cores,rewrite_metadata):
         Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs,number_cores=number_cores)
@@ -528,12 +1029,6 @@ class Reference_Generator_Uniprot_Rhea(Reference_Generator):
         hmm_file=f'{self.work_dir}uniprot_rhea.hmm'
 
 
-        if os.path.exists(self.work_dir) and self.remove_files:
-            shutil.rmtree(self.work_dir)
-
-        for directory in [self.work_dir, self.fasta_dir, self.aln_dir, self.hmm_dir]:
-            Path(directory).mkdir(parents=True, exist_ok=True)
-
 
         if not os.path.exists(compressed_uniprot_fastas) or not os.path.exists(uncompressed_uniprot_fastas):
             self.download_file_ftp(uniprot_fastas_url, compressed_uniprot_fastas)
@@ -557,7 +1052,7 @@ class Reference_Generator_Uniprot_Rhea(Reference_Generator):
         self.merge_profiles(output_file=hmm_file)
         print(f'Finished generating {hmm_file}')
 
-
+#MSAs need to be checked for quality
 class Reference_Generator_Uniprot_Reactome(Reference_Generator):
     def __init__(self,work_dir,remove_files,min_seqs,number_cores,rewrite_metadata):
         Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs,number_cores=number_cores)
@@ -628,12 +1123,6 @@ class Reference_Generator_Uniprot_Reactome(Reference_Generator):
         hmm_file=f'{self.work_dir}uniprot_reactome.hmm'
 
 
-        if os.path.exists(self.work_dir) and self.remove_files:
-            shutil.rmtree(self.work_dir)
-
-        for directory in [self.work_dir, self.fasta_dir, self.aln_dir, self.hmm_dir]:
-            Path(directory).mkdir(parents=True, exist_ok=True)
-
 
         if not os.path.exists(compressed_uniprot_fastas) or not os.path.exists(uncompressed_uniprot_fastas):
             self.download_file_ftp(uniprot_fastas_url, compressed_uniprot_fastas)
@@ -669,7 +1158,6 @@ class Reference_Generator_Uniprot_BIGG(Reference_Generator,Web_Connector):
 
     def get_all_models(self):
         res=set()
-        return {'e_coli_core'}
         models_url='http://bigg.ucsd.edu/api/v2/models'
         json_page=self.get_url_json(models_url)
         results=json_page['results']
@@ -777,7 +1265,6 @@ class Reference_Generator_Uniprot_BIGG(Reference_Generator,Web_Connector):
                         outline = f'>{seq_id}\n{protein_sequence}\n'
                         file.write(outline)
 
-
 class Reference_Generator_Uniprot_BIGG_Reactions(Reference_Generator_Uniprot_BIGG,Reference_Generator,Web_Connector):
     def __init__(self,work_dir,remove_files,min_seqs,number_cores,rewrite_metadata):
         Reference_Generator_Uniprot_BIGG.__init__(self,work_dir,remove_files,min_seqs,number_cores,rewrite_metadata)
@@ -799,6 +1286,8 @@ class Reference_Generator_Uniprot_BIGG_Reactions(Reference_Generator_Uniprot_BIG
         self.merge_faa()
         self.export_bigg_faa()
         self.split_fastas_to_reactions(reactions_genes)
+        self.run_mmseqs()
+        self.split_fastas_by_clusters()
 
     def split_fastas_to_reactions(self,reactions_genes):
         fasta_folder=f'{self.fasta_dir}'.rstrip(SPLITTER)
@@ -829,6 +1318,7 @@ class Reference_Generator_Uniprot_BIGG_Reactions(Reference_Generator_Uniprot_BIG
         return res
 
     def write_metadata(self):
+
         bigg_file=f'{self.work_dir}bigg_models_reactions.txt'
         bigg_url='http://bigg.ucsd.edu/static/namespace/bigg_models_reactions.txt'
         if not os.path.exists(bigg_file):
@@ -837,13 +1327,16 @@ class Reference_Generator_Uniprot_BIGG_Reactions(Reference_Generator_Uniprot_BIG
         bigg_metadata=self.parse_bigg(bigg_file)
         hmm_file=f'{self.work_dir}bigg.hmm'
         reactions_ids=self.get_hmm_names(hmm_file)
+        print(reactions_ids)
         if not os.path.exists(metadata_file):
             with open(metadata_file,'w+') as file:
                 for main_id in reactions_ids:
-                    if main_id in bigg_metadata:
+                    main_id_str=main_id.split('_')[0:-1]
+                    main_id_str='_'.join(main_id_str)
+                    if main_id_str in bigg_metadata:
                         line = [main_id,'|']
-                        for db in bigg_metadata[main_id]:
-                            for db_id in bigg_metadata[main_id][db]:
+                        for db in bigg_metadata[main_id_str]:
+                            for db_id in bigg_metadata[main_id_str][db]:
                                 line.append(f'{db}:{db_id}')
                         file.write('\t'.join(line)+'\n')
         os.remove(bigg_file)
@@ -851,10 +1344,6 @@ class Reference_Generator_Uniprot_BIGG_Reactions(Reference_Generator_Uniprot_BIG
 
     def workflow_function(self):
         hmm_file=f'{self.work_dir}bigg.hmm'
-        if os.path.exists(self.work_dir) and self.remove_files:
-            shutil.rmtree(self.work_dir)
-        for directory in [self.work_dir, self.fasta_dir, self.aln_dir, self.hmm_dir]:
-            Path(directory).mkdir(parents=True, exist_ok=True)
 
         if not os.listdir(self.fasta_dir):
             self.fasta_writer()
@@ -910,10 +1399,6 @@ class Reference_Generator_Uniprot_BIGG_Genes(Reference_Generator_Uniprot_BIGG,Re
 
 
     def workflow_function(self):
-        if os.path.exists(self.work_dir) and self.remove_files:
-            shutil.rmtree(self.work_dir)
-        for directory in [self.work_dir, self.fasta_dir]:
-            Path(directory).mkdir(parents=True, exist_ok=True)
 
         dmnd_file=f'{self.work_dir}bigg'
         fasta_path = f'{self.work_dir}bigg.faa'
@@ -933,7 +1418,7 @@ if __name__ == '__main__':
     print('Executing command:\n', ' '.join(argv))
     parser = argparse.ArgumentParser(description='This is a functional annotation reference generator tool\n'
                                      , formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument('-db','--database', help='[required]\tClustering ID',choices=['ec', 'rhea','reactome','bigg_reactions','bigg_genes'])
+    parser.add_argument('-db','--database', help='[required]\tClustering ID',choices=['ec', 'rhea','reactome','bigg_reactions','bigg_genes','swissprot','trembl'])
     parser.add_argument('-o', '--output_folder', help='[required]\tDirectory to save HMMs in')
     parser.add_argument('-c', '--number_cores', help='[optional]\tNumber of cores to use')
     parser.add_argument('-ms', '--min_seqs',help='[optional]\tMinimum sequences per HMM. Default is 10')
@@ -956,8 +1441,12 @@ if __name__ == '__main__':
         updater = Reference_Generator_Uniprot_Rhea(output_folder, remove_files,min_seqs,number_cores,rewrite_metadata)
     elif database=='reactome':
         updater=Reference_Generator_Uniprot_Reactome(output_folder,remove_files,min_seqs,number_cores,rewrite_metadata)
+    elif database=='swissprot':
+        updater=Reference_Generator_Uniprot(output_folder,remove_files,min_seqs,number_cores,rewrite_metadata,db='swissprot')
+    elif database=='trembl':
+        updater=Reference_Generator_Uniprot(output_folder,remove_files,min_seqs,number_cores,rewrite_metadata,db='trembl')
     elif database=='ec':
-        updater=Reference_Generator_Uniprot_EC(output_folder,remove_files,min_seqs,number_cores,rewrite_metadata)
+        updater=Reference_Generator_Uniprot(output_folder,remove_files,min_seqs,number_cores,rewrite_metadata,db='ec')
     elif database=='bigg_reactions':
         updater=Reference_Generator_Uniprot_BIGG_Reactions(output_folder,remove_files,min_seqs,number_cores,rewrite_metadata)
     elif database=='bigg_genes':
