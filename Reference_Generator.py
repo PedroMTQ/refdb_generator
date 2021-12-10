@@ -181,6 +181,7 @@ class Reference_Generator():
     def read_protein_fasta_generator(self,protein_fasta_path):
         query=None
         seq=[]
+        if not os.path.exists(protein_fasta_path): return res
         with open(protein_fasta_path, 'r') as file:
             line = file.readline()
             while line:
@@ -212,6 +213,7 @@ class Reference_Generator():
         query=None
         seq=[]
         res={}
+        if not os.path.exists(protein_fasta_path): return res
         with open(protein_fasta_path, 'r') as file:
             line = file.readline()
             while line:
@@ -1209,12 +1211,14 @@ class Reference_Generator_Uniprot_BIGG(Reference_Generator,Web_Connector):
     def export_to_fasta(self,model_id,gene_id,protein_sequence,dna_sequence):
         fasta_path_aa = f'{self.fasta_dir}{model_id}.faa_pre'
         fasta_path_nt = f'{self.fasta_dir}{model_id}.fna'
-        with open(fasta_path_aa, 'a+') as file:
-            outline = f'>{gene_id}\n{protein_sequence}\n'
-            file.write(outline)
-        with open(fasta_path_nt, 'a+') as file:
-            outline = f'>{gene_id}\n{dna_sequence}\n'
-            file.write(outline)
+        if protein_sequence:
+            with open(fasta_path_aa, 'a+') as file:
+                outline = f'>{gene_id}\n{protein_sequence}\n'
+                file.write(outline)
+        if dna_sequence:
+            with open(fasta_path_nt, 'a+') as file:
+                outline = f'>{gene_id}\n{dna_sequence}\n'
+                file.write(outline)
 
 
     def merge_faa(self):
