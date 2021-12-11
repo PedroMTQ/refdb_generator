@@ -1054,13 +1054,10 @@ class Reference_Generator_Uniprot_Rhea(Reference_Generator):
         self.merge_profiles(output_file=hmm_file)
         print(f'Finished generating {hmm_file}')
 
-#MSAs need to be checked for quality
 class Reference_Generator_Uniprot_Reactome(Reference_Generator):
     def __init__(self,work_dir,remove_files,min_seqs,number_cores,rewrite_metadata):
         Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs,number_cores=number_cores)
-        if not rewrite_metadata:
-            self.workflow_function()
-        self.write_metadata()
+        self.workflow_function()
 
 
     def parse_reactome2uniprot(self,reactome2uniprot_path):
@@ -1073,57 +1070,61 @@ class Reference_Generator_Uniprot_Reactome(Reference_Generator):
                 if line:
                     line = line.split('\t')
                     uniprot_id, master_id = line[0], line[1]
-                    if master_id not in res: res[master_id] = set()
-                    res[master_id].add(uniprot_id)
+                    if uniprot_id not in res: res[uniprot_id] = set()
+                    res[uniprot_id].add(master_id)
                 line = file.readline()
         return res
 
-
-
-    def write_metadata(self):
+    def write_metadata(self,reactome_uniprot):
         bigg2refs_file=f'{self.work_dir}bigg_models_reactions.txt'
         bigg2refs_file_url='http://bigg.ucsd.edu/static/namespace/bigg_models_reactions.txt'
 
         if not os.path.exists(bigg2refs_file):
             self.download_file_ftp(bigg2refs_file_url, bigg2refs_file)
-
         wanted_db='reactome'
         metadata_file = f'{self.work_dir}metadata.tsv'
         bigg_metadata=self.parse_bigg(bigg2refs_file,wanted_dbs=[wanted_db])
         if not os.path.exists(metadata_file):
             with open(metadata_file,'w+') as file:
-                for main_id in bigg_metadata:
-                    line = [main_id,'|']
-                    line.append(f'{wanted_db}:{main_id}')
-                    for db_id in bigg_metadata[main_id]:
-                        line.append(f'bigg:{db_id}')
+                for uniprot_id in reactome_uniprot:
+                    line = [uniprot_id,'|']
+                    for reactome_id in reactome_uniprot[uniprot_id]:
+                        line.append(f'reactome:{reactome_id}')
+                        if reactome_id in bigg_metadata:
+                            for db_id in bigg_metadata[reactome_id]:
+                                line.append(f'bigg:{db_id}')
                     file.write('\t'.join(line)+'\n')
         os.remove(bigg2refs_file)
 
-    def fasta_writer(self,uniprot_mapping, uncompressed_uniprot_fastas):
+    def merge_faa(self,main_fasta):
+        fasta_folder=f'{self.fasta_dir}{SPLITTER}'
+        with open(main_fasta, 'a+') as file:
+            for fasta in os.listdir(fasta_folder):
+                all_sequences=self.read_protein_fasta_generator(fasta)
+                for seq_id,protein_sequence in all_sequences:
+                    outline = f'>{seq_id}\n{protein_sequence}\n'
+                    file.write(outline)
+
+    def fasta_writer(self,fasta_path,uniprot_mapping, uncompressed_uniprot_fastas):
         uniprot_seqs=self.read_protein_fasta_generator(uncompressed_uniprot_fastas)
-        for uniprot_seq in uniprot_seqs:
-            uniprot_id,sequence=uniprot_seq
-            for main_id in uniprot_mapping:
-                seq_ids=uniprot_mapping[main_id]
-                if uniprot_id in seq_ids:
-                    fasta_file = f'{self.fasta_dir}{main_id}.faa'
-                    with open(fasta_file, 'a+') as file:
-                        outline = f'>{uniprot_id}\n{sequence}\n'
-                        file.write(outline)
+        with open(fasta_path, 'w+') as file:
+            for uniprot_id,sequence in uniprot_seqs:
+                if uniprot_id in uniprot_mapping:
+                    outline = f'>{uniprot_id}\n{sequence}\n'
+                    file.write(outline)
 
 
     def workflow_function(self):
 
         uniprot_fastas_url = 'https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.fasta.gz'
-        compressed_uniprot_fastas = f'{self.work_dir}uniprot_file.xml.gz'
-        uncompressed_uniprot_fastas = f'{self.work_dir}uniprot_file.xml'
+        compressed_uniprot_fastas = f'{self.work_dir}uniprot_file.faa.gz'
+        uncompressed_uniprot_fastas = f'{self.work_dir}uniprot_file.faa'
 
         reactome2uniprot_url='https://reactome.org/download/current/UniProt2ReactomeReactions.txt'
         reactome2uniprot_file = f'{self.work_dir}UniProt2ReactomeReactions.txt'
 
-        hmm_file=f'{self.work_dir}uniprot_reactome.hmm'
-
+        dmnd_file=f'{self.work_dir}reactome'
+        fasta_path = f'{self.work_dir}reactome.faa'
 
 
         if not os.path.exists(compressed_uniprot_fastas) or not os.path.exists(uncompressed_uniprot_fastas):
@@ -1138,13 +1139,17 @@ class Reference_Generator_Uniprot_Reactome(Reference_Generator):
 
         if not os.listdir(self.fasta_dir):
             reactome_uniprot = self.parse_reactome2uniprot(reactome2uniprot_file)
-            self.fasta_writer(reactome_uniprot, uncompressed_uniprot_fastas)
+            self.fasta_writer(fasta_path,reactome_uniprot, uncompressed_uniprot_fastas)
 
+        diamond_path=f'{self.work_dir}diamond'
 
-        self.launch_fastas_msa()
-        self.launch_aln_hmmer()
-        self.merge_profiles(output_file=hmm_file)
-        print(f'Finished generating {hmm_file}')
+        if not os.path.exists(diamond_path):
+            self.download_diamond()
+        dmnd_command=f'{diamond_path} makedb --in {fasta_path} -d {dmnd_file}'
+        subprocess.run(dmnd_command.split())
+        self.write_metadata(reactome_uniprot)
+        os.remove(diamond_path)
+        print(f'Finished generating {dmnd_file}.dmnd')
         os.remove(reactome2uniprot_file)
         os.remove(compressed_uniprot_fastas)
         os.remove(uncompressed_uniprot_fastas)
@@ -1422,7 +1427,7 @@ if __name__ == '__main__':
     print('Executing command:\n', ' '.join(argv))
     parser = argparse.ArgumentParser(description='This is a functional annotation reference generator tool\n'
                                      , formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument('-db','--database', help='[required]\tClustering ID',choices=['ec', 'rhea','reactome','bigg_reactions','bigg_genes','swissprot','trembl'])
+    parser.add_argument('-db','--database', help='[required]\tClustering ID',choices=['ec', 'rhea','reactome','bigg_genes','swissprot','trembl'])
     parser.add_argument('-o', '--output_folder', help='[required]\tDirectory to save HMMs in')
     parser.add_argument('-c', '--number_cores', help='[optional]\tNumber of cores to use')
     parser.add_argument('-ms', '--min_seqs',help='[optional]\tMinimum sequences per HMM. Default is 10')
@@ -1451,8 +1456,6 @@ if __name__ == '__main__':
         updater=Reference_Generator_Uniprot(output_folder,remove_files,min_seqs,number_cores,rewrite_metadata,db='trembl')
     elif database=='ec':
         updater=Reference_Generator_Uniprot(output_folder,remove_files,min_seqs,number_cores,rewrite_metadata,db='ec')
-    elif database=='bigg_reactions':
-        updater=Reference_Generator_Uniprot_BIGG_Reactions(output_folder,remove_files,min_seqs,number_cores,rewrite_metadata)
     elif database=='bigg_genes':
         updater=Reference_Generator_Uniprot_BIGG_Genes(output_folder,remove_files,min_seqs,number_cores,rewrite_metadata)
     else:

@@ -1,10 +1,9 @@
 Provides automated creation of multiple databases:
 - Rhea HMMs **implementation not finished**
-- Reactome HMMs **implementation not finished**
+- Reactome diamond database
 - Swissprot diamond database 
 - Trembl diamond database 
 - Enzyme EC HMMs 
-- BIGG reactions HMMs **implementation not finished**
 - BIGG genes diamond database 
 
 
@@ -13,7 +12,7 @@ BIGG is generally used for metabolic modelling and these HMMs can thus be linked
 All databases contain cross-linking metadata which is in a format compatible to Mantis - https://github.com/PedroMTQ/mantis
 
 Arguments:
-- `-db` or `--database`,to choose whether to cluster with `rhea`, `reactome`, `swissprot`, `trembl`, `ec`, `bigg_reactions` and `bigg_genes`
+- `-db` or `--database`,to choose whether to cluster with `rhea`, `reactome`, `swissprot`, `trembl`, `ec`, and `bigg_genes`
 - `-o` or `--output_folder`,to specify directory to save database in
 - `-ms` or `--min_seqs`, minimum sequences per HMM. Default is 10
 - `-rf` or `--remove_files`, to remove files from previous runs
