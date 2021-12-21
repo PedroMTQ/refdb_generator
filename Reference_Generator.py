@@ -190,7 +190,7 @@ class Reference_Generator():
                         if '|' in query:
                             query = query.split('|')[1]
                         if protein_fasta_path.endswith('_pro'):
-                            query = query.split('_')[0]
+                            query = query.split()[0]
                         seq=''.join(seq).upper()
                         if seq:
                             yield query,seq
@@ -203,7 +203,7 @@ class Reference_Generator():
                 if '|' in query:
                     query=query.split('|')[1]
                     if protein_fasta_path.endswith('_pro'):
-                        query = query.split('_')[0]
+                        query = query.split()[0]
                 seq = ''.join(seq).upper()
                 if seq:
                     yield query, seq
@@ -222,7 +222,7 @@ class Reference_Generator():
                         if '|' in query:
                             query = query.split('|')[1]
                         if protein_fasta_path.endswith('_pro'):
-                            query = query.split('_')[0]
+                            query = query.split()[0]
                         res[query]= ''.join(seq).upper()
                         seq=[]
                     query=line.replace('>','').strip()
@@ -233,7 +233,7 @@ class Reference_Generator():
                 if '|' in query:
                     query=query.split('|')[1]
                 if protein_fasta_path.endswith('_pro'):
-                    query = query.split('_')[0]
+                    query = query.split()[0]
                 res[query] = ''.join(seq).upper()
         return res
 
@@ -390,7 +390,7 @@ class Reference_Generator():
 
 #MSAs need to be checked for quality
 class Reference_Generator_Uniprot(Reference_Generator):
-    def __init__(self,work_dir,remove_files,min_seqs,number_cores,rewrite_metadata,db):
+    def __init__(self,work_dir,remove_files,min_seqs,number_cores,db):
         Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs,number_cores=number_cores)
         self.db=db
         self.workflow_function()
@@ -677,10 +677,9 @@ class Reference_Generator_Uniprot(Reference_Generator):
 
 #MSAs need to be checked for quality
 class Reference_Generator_Rhea(Reference_Generator):
-    def __init__(self,work_dir,remove_files,min_seqs,number_cores,rewrite_metadata):
+    def __init__(self,work_dir,remove_files,min_seqs,number_cores):
         Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs,number_cores=number_cores)
-        if not rewrite_metadata:
-            self.workflow_function()
+        self.workflow_function()
         self.write_metadata()
 
 
@@ -812,7 +811,7 @@ class Reference_Generator_Rhea(Reference_Generator):
         print(f'Finished generating {hmm_file}')
 
 class Reference_Generator_Reactome(Reference_Generator):
-    def __init__(self,work_dir,remove_files,min_seqs,number_cores,rewrite_metadata):
+    def __init__(self,work_dir,remove_files,min_seqs,number_cores):
         Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs,number_cores=number_cores)
         self.workflow_function()
 
@@ -912,13 +911,12 @@ class Reference_Generator_Reactome(Reference_Generator):
         os.remove(uncompressed_uniprot_fastas)
 
 class Reference_Generator_BIGG(Reference_Generator,Web_Connector):
-    def __init__(self,work_dir,remove_files,min_seqs,number_cores,rewrite_metadata):
+    def __init__(self,work_dir,remove_files,min_seqs,number_cores):
         Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs,number_cores=number_cores)
         Web_Connector.__init__(self)
         self.mp_results = self.manager.list()
-        if not rewrite_metadata:
-            self.workflow_function()
-        self.write_metadata()
+        self.workflow_function()
+
 
     def get_all_models(self):
         res=set()
@@ -982,6 +980,25 @@ class Reference_Generator_BIGG(Reference_Generator,Web_Connector):
                 outline = f'>{gene_id}\n{dna_sequence}\n'
                 file.write(outline)
 
+    def write_metadata(self,bigg_metadata,metadata_file,sequences,prodigal_proteins):
+        with open(metadata_file,'a+') as file:
+            for seq_id in sequences:
+                if seq_id in prodigal_proteins:
+                    baseline_seq_id=seq_id.split('_')[0:-1]
+                    baseline_seq_id='_'.join(baseline_seq_id)
+                else: baseline_seq_id =seq_id
+                line = [baseline_seq_id,'|']
+                if baseline_seq_id in self.genes_reactions:
+                    for reaction_id in self.genes_reactions[baseline_seq_id]:
+                        line.append(f'bigg_reaction:{reaction_id}')
+                        if reaction_id in bigg_metadata:
+                            for db in bigg_metadata[reaction_id]:
+                                for db_id in bigg_metadata[reaction_id][db]:
+                                    line.append(f'{db}:{db_id}')
+                    file.write('\t'.join(line)+'\n')
+                else:
+                    print(f'Seq missing {baseline_seq_id}')
+
 
     def merge_faa(self):
         '''
@@ -989,6 +1006,13 @@ class Reference_Generator_BIGG(Reference_Generator,Web_Connector):
         the other with the protein sequences predicted with prodigal
         the resulting fasta will add protein sequences from bigg per gene, if not available it adds protein sequences from prodigal
         '''
+        bigg_file=f'{self.work_dir}bigg_models_reactions.txt'
+        bigg_url='http://bigg.ucsd.edu/static/namespace/bigg_models_reactions.txt'
+        if not os.path.exists(bigg_file):
+            self.download_file_ftp(bigg_url, bigg_file)
+        metadata_file = f'{self.work_dir}metadata.tsv'
+        bigg_metadata=self.parse_bigg(bigg_file)
+
         fasta_folder=f'{self.fasta_dir}{SPLITTER}'
         model_list=[i.replace('.fna','') for i in os.listdir(fasta_folder) if i.endswith('.fna')]
         for model_id in model_list:
@@ -997,8 +1021,8 @@ class Reference_Generator_BIGG(Reference_Generator,Web_Connector):
             fna=f'{fasta_folder}{model_id}.fna'
             all_pre_proteins=self.read_protein_fasta(faa_pre)
             all_prodigal_proteins=self.read_protein_fasta(faa_prodigal)
-            all_genes=self.read_protein_fasta(fna)
-            all_sequences=set(list(all_pre_proteins.keys())+list(all_prodigal_proteins.keys())+list(all_genes.keys()))
+            all_sequences=set(list(all_pre_proteins.keys())+list(all_prodigal_proteins.keys()))
+            self.write_metadata(bigg_metadata,metadata_file,all_sequences,all_prodigal_proteins)
             for seq_id in all_sequences:
                 fasta_path_aa = f'{self.fasta_dir}{SPLITTER}{model_id}.faa'
                 protein_sequence=None
@@ -1046,42 +1070,23 @@ class Reference_Generator_BIGG(Reference_Generator,Web_Connector):
         self.merge_faa()
         self.export_bigg_faa()
 
-    def write_metadata(self):
-        bigg_file=f'{self.work_dir}bigg_models_reactions.txt'
-        bigg_url='http://bigg.ucsd.edu/static/namespace/bigg_models_reactions.txt'
-        if not os.path.exists(bigg_file):
-            self.download_file_ftp(bigg_url, bigg_file)
-        metadata_file = f'{self.work_dir}metadata.tsv'
-        bigg_metadata=self.parse_bigg(bigg_file)
-        if not os.path.exists(metadata_file):
-            with open(metadata_file,'w+') as file:
-                for gene_id in self.genes_reactions:
-                    line = [gene_id,'|']
-                    for reaction_id in self.genes_reactions[gene_id]:
-                        line.append(f'bigg_reaction:{reaction_id}')
-                        if reaction_id in bigg_metadata:
-                            for db in bigg_metadata[reaction_id]:
-                                for db_id in bigg_metadata[reaction_id][db]:
-                                    line.append(f'{db}:{db_id}')
-                    file.write('\t'.join(line)+'\n')
-        os.remove(bigg_file)
-
-
 
     def workflow_function(self):
 
         dmnd_file=f'{self.work_dir}bigg'
         fasta_path = f'{self.work_dir}bigg.faa'
+        bigg_file=f'{self.work_dir}bigg_models_reactions.txt'
 
-        if not os.listdir(self.fasta_dir):
-            self.fasta_writer()
 
+        self.fasta_writer()
         self.download_diamond()
         diamond_path=f'{self.work_dir}diamond'
         dmnd_command=f'{diamond_path} makedb --in {fasta_path} -d {dmnd_file}'
         subprocess.run(dmnd_command.split())
-        os.remove(diamond_path)
         print(f'Finished generating {dmnd_file}')
+
+        os.remove(diamond_path)
+        os.remove(bigg_file)
 
 
 if __name__ == '__main__':
@@ -1094,7 +1099,6 @@ if __name__ == '__main__':
     parser.add_argument('-ms', '--min_seqs',help='[optional]\tMinimum sequences per HMM. Default is 10')
     parser.add_argument('-rf', '--remove_files', action='store_true',help='[optional]\tuse this to remove files from previous runs.')
 
-    parser.add_argument('-meta', '--rewrite_metadata', action='store_true',help='[developer]\tuse this to rewrite metadata')
 
     args = parser.parse_args()
     database = args.database
@@ -1102,22 +1106,21 @@ if __name__ == '__main__':
     min_seqs = args.min_seqs
     number_cores = args.number_cores
     remove_files = args.remove_files
-    rewrite_metadata = args.rewrite_metadata
     if min_seqs:    min_seqs=int(min_seqs)
     else:           min_seqs=10
     if not output_folder:
         print('Missing output folder!')
     elif database=='rhea':
-        updater = Reference_Generator_Rhea(output_folder, remove_files,min_seqs,number_cores,rewrite_metadata)
+        updater = Reference_Generator_Rhea(output_folder, remove_files,min_seqs,number_cores)
     elif database=='reactome':
-        updater=Reference_Generator_Reactome(output_folder,remove_files,min_seqs,number_cores,rewrite_metadata)
+        updater=Reference_Generator_Reactome(output_folder,remove_files,min_seqs,number_cores)
     elif database=='swissprot':
-        updater=Reference_Generator_Uniprot(output_folder,remove_files,min_seqs,number_cores,rewrite_metadata,db='swissprot')
+        updater=Reference_Generator_Uniprot(output_folder,remove_files,min_seqs,number_cores,db='swissprot')
     elif database=='trembl':
-        updater=Reference_Generator_Uniprot(output_folder,remove_files,min_seqs,number_cores,rewrite_metadata,db='trembl')
+        updater=Reference_Generator_Uniprot(output_folder,remove_files,min_seqs,number_cores,db='trembl')
     elif database=='ec':
-        updater=Reference_Generator_Uniprot(output_folder,remove_files,min_seqs,number_cores,rewrite_metadata,db='ec')
+        updater=Reference_Generator_Uniprot(output_folder,remove_files,min_seqs,number_cores,db='ec')
     elif database=='bigg_genes':
-        updater=Reference_Generator_BIGG(output_folder,remove_files,min_seqs,number_cores,rewrite_metadata)
+        updater=Reference_Generator_BIGG(output_folder,remove_files,min_seqs,number_cores)
     else:
         print('Command is not valid')
