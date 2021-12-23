@@ -11,6 +11,6 @@ dependencies:
   - requests
   - urllib3
   - clustalo 
-  - mmseqs
+  - mmseqs2
   - prodigal
 

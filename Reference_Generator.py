@@ -1108,6 +1108,11 @@ if __name__ == '__main__':
     remove_files = args.remove_files
     if min_seqs:    min_seqs=int(min_seqs)
     else:           min_seqs=10
+    if output_folder:
+        is_absolute=os.path.isabs(output_folder)
+        if not is_absolute:
+            output_folder= os.getcwd()+SPLITTER+output_folder
+
     if not output_folder:
         print('Missing output folder!')
     elif database=='rhea':
