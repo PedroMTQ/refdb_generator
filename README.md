@@ -5,6 +5,7 @@ Provides automated creation of multiple databases:
 - Trembl diamond database
 - Enzyme EC HMMs
 - BIGG genes diamond database
+- Metacyc proteins diamond database
 
 
 BIGG is generally used for metabolic modelling and these HMMs can thus be linked to metabolic models and metabolic model generation tools
@@ -27,6 +28,13 @@ To run this tool:
 2. Go to cloned mantis folder and run `conda env create -f reference_generator.yml`
 3. Run `conda activate reference_generator`
 5. Run `python Reference_Generator.py` with the required arguments
+
+To generate the Metacyc diamond database you need the academic license from Metacyc:
+1. Request [Metacyc license](https://metacyc.org/download.shtml)
+2. Download the `Metacyc flat files`
+3. Export the `protseq.fsa` and `proteins.dat` in data to an `output_folder`
+4. Run `python Reference_Generator.py -db metacyc -o output_folder`
+
 
 ### How are these references created?
 

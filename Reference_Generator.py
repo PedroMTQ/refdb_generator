@@ -14,13 +14,32 @@ from sys import argv
 from Web_Connector import Web_Connector
 import requests
 from gzip import open as gzip_open
+from html.parser import HTMLParser
+
 
 __author__ = "Pedro Queirós"
 __status__ = "Production"
 __credits__ = ['Pedro Queirós']
 SPLITTER='/'
 
+class MLStripper(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.reset()
+        self.strict = False
+        self.convert_charrefs = True
+        self.fed = []
 
+    def handle_data(self, d):
+        self.fed.append(d)
+
+    def get_data(self):
+        return ''.join(self.fed)
+
+def strip_tags(html):
+    s = MLStripper()
+    s.feed(html)
+    return s.get_data()
 
 class Reference_Generator():
     def __init__(self,work_dir,remove_files=False,min_seqs=10,number_cores=None):
@@ -187,10 +206,14 @@ class Reference_Generator():
             while line:
                 if line.startswith('>'):
                     if query:
-                        if '|' in query:
-                            query = query.split('|')[1]
-                        if protein_fasta_path.endswith('_pro'):
-                            query = query.split()[0]
+                        if protein_fasta_path.endswith('protseq.fsa'):
+                            query=query.split()[0]
+                            query=query.split('|')[-1]
+                        else:
+                            if '|' in query:
+                                query = query.split('|')[1]
+                            if protein_fasta_path.endswith('_pro'):
+                                query = query.split()[0]
                         seq=''.join(seq).upper()
                         if seq:
                             yield query,seq
@@ -200,10 +223,14 @@ class Reference_Generator():
                     seq.append(line.strip())
                 line = file.readline()
             if query:
-                if '|' in query:
-                    query=query.split('|')[1]
-                    if protein_fasta_path.endswith('_pro'):
-                        query = query.split()[0]
+                if protein_fasta_path.endswith('protseq.fsa'):
+                    query = query.split()[0]
+                    query = query.split('|')[-1]
+                else:
+                    if '|' in query:
+                        query=query.split('|')[1]
+                        if protein_fasta_path.endswith('_pro'):
+                            query = query.split()[0]
                 seq = ''.join(seq).upper()
                 if seq:
                     yield query, seq
@@ -910,6 +937,133 @@ class Reference_Generator_Reactome(Reference_Generator):
         os.remove(compressed_uniprot_fastas)
         os.remove(uncompressed_uniprot_fastas)
 
+
+
+class Reference_Generator_Metacyc(Reference_Generator):
+    def __init__(self,work_dir,remove_files,min_seqs,number_cores):
+        Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs,number_cores=number_cores)
+        self.workflow_function()
+
+
+    def parse_proteins_dat(self,proteins_dat):
+        line_type = None
+        temp={}
+        with open(proteins_dat,encoding="ISO-8859-1") as file:
+            for line in file:
+                line=line.strip('\n')
+                if line.startswith('UNIQUE-ID'):
+                    if temp:
+                        yield temp
+                    line=line.replace('UNIQUE-ID - ','')
+                    line=line.strip()
+                    line=strip_tags(line)
+                    temp={'metacyc':{line}}
+                    line_type=None
+                elif    line.startswith('ACCESSION-1') or \
+                        line.startswith('COMMON-NAME') or\
+                        line.startswith('ABBREV-NAME') or\
+                        line.startswith('DBLINKS'):
+                    line_type = line.split()[0]
+                else:
+                    line_type=None
+                if line_type:
+                    line=line.replace(line_type,'').strip().strip('-').strip()
+                    line=strip_tags(line)
+                    if line_type in ['COMMON-NAME','ABBREV-NAME',]:
+                        db_type='description'
+                    elif line_type in ['ACCESSION-1']:
+                        db_type = 'metacyc'
+                    else:
+                        line = line.split()
+                        db_type = line[0][1:].strip()
+                        line = line[1].strip(')').strip()
+                        line = line.strip('(').strip()
+                        line = line.strip('"').strip()
+                        if db_type=='METANETX':
+                            db_type='metanetx'
+                        elif db_type=='PANTHER':
+                            db_type='panther'
+                        elif db_type=='ECOCYC':
+                            db_type='metacyc'
+                        elif db_type=='BIOCYC':
+                            db_type='metacyc'
+                        elif db_type=='TRANSPORTER_CLASSIFICATION_DATABASE':
+                            db_type='tcdb'
+                        elif db_type=='INTERPRO':
+                            db_type='interpro'
+                        elif db_type=='CAZY':
+                            db_type='cazy'
+                        elif db_type=='REFSEQ':
+                            db_type='refseq'
+                        elif db_type=='SEED':
+                            db_type='seed'
+                        elif db_type=='STRING':
+                            db_type='string'
+                        elif db_type=='PROSITE':
+                            db_type='prosite'
+                        elif db_type=='PFAM':
+                            db_type='pfam'
+                        elif db_type=='UNIPROT':
+                            db_type='uniprot'
+                        else:
+                            db_type=None
+                    if db_type:
+                        if db_type not in temp: temp[db_type]=set()
+                        temp[db_type].add(line)
+
+        yield temp
+
+
+
+    def write_metadata(self,):
+        proteins_dat=f'{self.work_dir}proteins.dat'
+
+        if not os.path.exists(proteins_dat):
+            print('Cannot write metadata for metacyc, missing file!')
+            raise Exception
+        metadata_file = f'{self.work_dir}metadata.tsv'
+        metacyc_metadata=self.parse_proteins_dat(proteins_dat)
+        with open(metadata_file,'w+') as file:
+            for meta_dict in metacyc_metadata:
+                for metacyc_id in meta_dict['metacyc']:
+                    line = [metacyc_id, '|']
+                    for db_type in meta_dict:
+                        for db_id in meta_dict[db_type]:
+                            line.append(f'{db_type}:{db_id}')
+                    file.write('\t'.join(line) + '\n')
+
+
+
+    def merge_faa(self,main_fasta):
+        fasta_folder=f'{self.fasta_dir}{SPLITTER}'
+        with open(main_fasta, 'a+') as file:
+            for fasta in os.listdir(fasta_folder):
+                all_sequences=self.read_protein_fasta_generator(fasta)
+                for seq_id,protein_sequence in all_sequences:
+                    outline = f'>{seq_id}\n{protein_sequence}\n'
+                    file.write(outline)
+
+    def fasta_writer(self,fasta_path):
+        raw_seqs_fasta=f'{self.work_dir}protseq.fsa'
+        all_seqs=self.read_protein_fasta_generator(raw_seqs_fasta)
+        with open(fasta_path, 'w+') as file:
+            for seq_id,sequence in all_seqs:
+                outline = f'>{seq_id}\n{sequence}\n'
+                file.write(outline)
+
+
+    def workflow_function(self):
+        dmnd_file=f'{self.work_dir}metacyc'
+        fasta_path = f'{self.work_dir}metacyc.faa'
+        self.fasta_writer(fasta_path)
+        dmnd_command=f'diamond makedb --in {fasta_path} -d {dmnd_file}'
+        subprocess.run(dmnd_command.split())
+        self.write_metadata()
+        print(f'Finished generating {dmnd_file}.dmnd')
+
+
+
+
 class Reference_Generator_BIGG(Reference_Generator,Web_Connector):
     def __init__(self,work_dir,remove_files,min_seqs,number_cores):
         Reference_Generator.__init__(self,work_dir=work_dir,remove_files=remove_files,min_seqs=min_seqs,number_cores=number_cores)
@@ -1093,7 +1247,7 @@ if __name__ == '__main__':
     print('Executing command:\n', ' '.join(argv))
     parser = argparse.ArgumentParser(description='This is a functional annotation reference generator tool\n'
                                      , formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument('-db','--database', help='[required]\tClustering ID',choices=['ec', 'rhea','reactome','bigg_genes','swissprot','trembl'])
+    parser.add_argument('-db','--database', help='[required]\tClustering ID',choices=['ec', 'rhea','reactome','bigg_genes','swissprot','trembl','metacyc'])
     parser.add_argument('-o', '--output_folder', help='[required]\tDirectory to save HMMs in')
     parser.add_argument('-c', '--number_cores', help='[optional]\tNumber of cores to use')
     parser.add_argument('-ms', '--min_seqs',help='[optional]\tMinimum sequences per HMM. Default is 10')
@@ -1127,5 +1281,7 @@ if __name__ == '__main__':
         updater=Reference_Generator_Uniprot(output_folder,remove_files,min_seqs,number_cores,db='ec')
     elif database=='bigg_genes':
         updater=Reference_Generator_BIGG(output_folder,remove_files,min_seqs,number_cores)
+    elif database=='metacyc':
+        updater=Reference_Generator_Metacyc(output_folder,remove_files,min_seqs,number_cores)
     else:
         print('Command is not valid')
