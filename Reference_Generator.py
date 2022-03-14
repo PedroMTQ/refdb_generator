@@ -200,7 +200,7 @@ class Reference_Generator():
     def read_protein_fasta_generator(self,protein_fasta_path):
         query=None
         seq=[]
-        if not os.path.exists(protein_fasta_path): return res
+        if not os.path.exists(protein_fasta_path): return
         with open(protein_fasta_path, 'r') as file:
             line = file.readline()
             while line:
@@ -1019,7 +1019,7 @@ class Reference_Generator_Metacyc(Reference_Generator):
         proteins_dat=f'{self.work_dir}proteins.dat'
 
         if not os.path.exists(proteins_dat):
-            print('Cannot write metadata for metacyc, missing file!')
+            print(f'Cannot write metadata for metacyc, missing metada file {proteins_dat}')
             raise Exception
         metadata_file = f'{self.work_dir}metadata.tsv'
         metacyc_metadata=self.parse_proteins_dat(proteins_dat)
@@ -1045,6 +1045,9 @@ class Reference_Generator_Metacyc(Reference_Generator):
 
     def fasta_writer(self,fasta_path):
         raw_seqs_fasta=f'{self.work_dir}protseq.fsa'
+        if not os.path.exists(raw_seqs_fasta):
+            print(f'Cannot write metadata for metacyc, missing metacyc {raw_seqs_fasta}')
+            raise Exception
         all_seqs=self.read_protein_fasta_generator(raw_seqs_fasta)
         with open(fasta_path, 'w+') as file:
             for seq_id,sequence in all_seqs:
