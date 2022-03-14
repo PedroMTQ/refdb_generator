@@ -1144,7 +1144,7 @@ class Reference_Generator_BIGG(Reference_Generator,Web_Connector):
                     baseline_seq_id=seq_id.split('_')[0:-1]
                     baseline_seq_id='_'.join(baseline_seq_id)
                 else: baseline_seq_id =seq_id
-                line = [baseline_seq_id,'|']
+                line = [seq_id,'|']
                 if baseline_seq_id in self.genes_reactions:
                     for reaction_id in self.genes_reactions[baseline_seq_id]:
                         line.append(f'bigg_reaction:{reaction_id}')
@@ -1155,6 +1155,25 @@ class Reference_Generator_BIGG(Reference_Generator,Web_Connector):
                     file.write('\t'.join(line)+'\n')
                 else:
                     print(f'Seq missing {baseline_seq_id}')
+
+    def get_all_sequences(self,all_pre_proteins,all_prodigal_proteins):
+        prodigal_pattern=re.compile('_\d{1,2}$')
+        res=set()
+        for protein_id in all_pre_proteins:
+            protein_seq=all_pre_proteins[protein_id]
+            protein_seq=set(protein_seq)
+            if len(protein_seq)>1:
+                res.add(protein_id)
+        for protein_id in all_prodigal_proteins:
+            protein_seq=all_prodigal_proteins[protein_id]
+            protein_seq=set(protein_seq)
+            if len(protein_seq)>1:
+                digit_prodigal=prodigal_pattern.search(protein_id)
+                if digit_prodigal:
+                    temp_protein_id=protein_id[:digit_prodigal.span()[0]]
+                    if temp_protein_id not in res:
+                        res.add(protein_id)
+        return res
 
 
     def merge_faa(self):
@@ -1178,7 +1197,7 @@ class Reference_Generator_BIGG(Reference_Generator,Web_Connector):
             fna=f'{fasta_folder}{model_id}.fna'
             all_pre_proteins=self.read_protein_fasta(faa_pre)
             all_prodigal_proteins=self.read_protein_fasta(faa_prodigal)
-            all_sequences=set(list(all_pre_proteins.keys())+list(all_prodigal_proteins.keys()))
+            all_sequences=self.get_all_sequences(all_pre_proteins,all_prodigal_proteins)
             self.write_metadata(bigg_metadata,metadata_file,all_sequences,all_prodigal_proteins)
             for seq_id in all_sequences:
                 fasta_path_aa = f'{self.fasta_dir}{SPLITTER}{model_id}.faa'
